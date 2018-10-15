@@ -1,0 +1,31 @@
+---
+title: "med_spending_markdown_test"
+author: "Darya Akimova"
+date: "October 15, 2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r}
+library(reticulate)
+#conda_create("r-reticulate")
+#conda_install("r-reticulate", "scipy")
+use_virtualenv("r-reticulate")
+```
+
+
+```{python}
+x = 42 * 2
+print(x)
+```
+
+```{python}
+import matplotlib.pyplot as plt
+import numpy as np
+t = np.arange(0.0, 2.0, 0.01)
+```
+
