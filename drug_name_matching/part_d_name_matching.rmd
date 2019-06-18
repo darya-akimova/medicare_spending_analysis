@@ -1,0 +1,964 @@
+---
+title: "Medicare Part D drug name matching across years"
+author: "Darya Akimova"
+date: "6/13/2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+# Setup
+
+## Packages:
+
+```{r packages, comment=NA}
+library(tidyverse)
+library(data.world)
+theme_set(theme_minimal())
+```
+
+
+## Data
+
+```{r data, comment=NA}
+data_source <- "https://data.world/dakimova/medicare-partd-tidy-2016"
+names_16 <- data.world::query(
+  data.world::qry_sql("SELECT brand_name, generic_name, manufacturer, year, total_claims FROM medicare_partD_tidy_2016"),
+  dataset = data_source
+  )
+names_17 <- data.world::query(
+  data.world::qry_sql("SELECT brand_name, generic_name, manufacturer, year, total_claims  FROM medicare_partD_tidy_2017"),
+  dataset = data_source
+  )
+```
+
+
+# Cleaning and Matching
+
+## Checks
+
+```{r prelim_checks, comment_NA}
+# NA checks
+sapply(names_16, anyNA)
+sapply(names_17, anyNA)
+# size
+dim(names_16)
+dim(names_17)
+# test
+names_16 %>% select(brand_name:manufacturer) %>% distinct() %>% 
+  inner_join(
+    names_17 %>% select(brand_name:manufacturer) %>% distinct(),
+    by = c("brand_name", "generic_name", "manufacturer")
+    ) %>% 
+  nrow()
+names_16 %>% 
+  anti_join(names_17, by = "brand_name") %>% 
+  arrange(brand_name, generic_name, manufacturer) %>% 
+  count(year)
+names_17 %>% 
+  anti_join(names_16, by = "brand_name") %>% 
+  arrange(brand_name, generic_name, manufacturer) %>% 
+  count(year)
+names_16 %>% 
+  count(year)
+names_17 %>% 
+  count(year)
+names_16 %>% 
+  count(brand_name, generic_name, manufacturer) %>% 
+  filter(n < 2)
+names_17 %>% 
+  count(brand_name, generic_name, manufacturer) %>% 
+  filter(n < 2)
+# drugs should overlap
+```
+
+
+## Manufacturer Name Match
+
+```{r manufact_names, comment=NA}
+manu_miss_16 <- names_16 %>% 
+  select(manufacturer) %>% 
+  distinct() %>% 
+  anti_join(names_17, by = "manufacturer")
+manu_miss_17 <- names_17 %>% 
+  select(manufacturer) %>% 
+  distinct() %>% 
+  anti_join(names_16, by = "manufacturer")
+manu_miss_16 %>% 
+  mutate(year = "2016") %>% 
+  bind_rows(
+    manu_miss_17 %>% 
+      mutate(year = "2017")
+  ) %>% 
+  arrange(manufacturer) %>% 
+  head(n=20)
+
+
+
+
+names_16 %>% 
+  arrange(manufacturer) %>% 
+  select(brand_name, manufacturer) %>% 
+  distinct() %>% 
+  anti_join(
+    names_17 %>% 
+      select(brand_name, manufacturer) %>% 
+      distinct(),
+    by = c("manufacturer", "brand_name")
+  )
+names_17 %>% 
+  arrange(manufacturer) %>% 
+  select(brand_name, manufacturer) %>% 
+  distinct() %>% 
+  anti_join(
+    names_16 %>% 
+      select(brand_name, manufacturer) %>% 
+      distinct(),
+    by = c("manufacturer", "brand_name")
+  )
+
+
+all_drugs <- names_16 %>% 
+  select(brand_name:manufacturer) %>% 
+  distinct() %>% 
+  mutate(year = "2016") %>% 
+  bind_rows(
+    names_17 %>% 
+      select(brand_name:manufacturer) %>% 
+      distinct() %>% 
+      mutate(year = "2017")
+  )
+unique_drugs <- all_drugs %>% 
+  count(brand_name, generic_name, manufacturer) %>% 
+  filter(n == 1)
+
+all_drugs %>% 
+  semi_join(unique_drugs, by = c("brand_name", "generic_name", "manufacturer")) %>% 
+  arrange(brand_name, generic_name, manufacturer)
+```
+
+
+
+```{r}
+data_full <- names_16 %>% 
+  full_join(names_17, by = c("brand_name", "generic_name", "manufacturer", "year"), suffix = c("_16", "_17"))
+data_full %>% 
+  filter(year != 2012 & year != 2017) %>% 
+  ggplot(aes(log(total_claims_16), log(total_claims_17))) +
+  geom_point(alpha = 0.5, size = 0.25) +
+  geom_smooth(method = "lm") +
+  facet_wrap(~ year) +
+  xlab("log(Total Claims (2016 dataset))") +
+  ylab("log(Total Claims (2017 dataset))")
+data_full %>% 
+  filter(year != 2012 & year != 2017) %>% 
+  ggplot(aes(log(total_claims_16), log(total_claims_17))) +
+  geom_bin2d(bins = 75) +
+  facet_wrap(~ year) +
+  xlab("log(Total Claims (2016 dataset))") +
+  ylab("log(Total Claims (2017 dataset))") +
+  scale_fill_viridis_c()
+
+# did the distribution between manufacturers change?
+data_full %>% 
+  filter(total_claims_16 != total_claims_17 | is.na(total_claims_16) | is.na(total_claims_17)) %>% 
+  gather("dataset", "total_claims", total_claims_16:total_claims_17) %>% 
+  filter(!is.na(total_claims)) %>% 
+  group_by(brand_name, generic_name, year, dataset) %>% 
+  summarize(total_claims = sum(total_claims)) %>% 
+  ungroup() %>% 
+  spread(dataset, total_claims) %>% 
+  filter(year != 2012 & year != 2017) %>% 
+  ggplot(aes(log(total_claims_16), log(total_claims_17))) +
+  geom_point(alpha = 0.5, size = 0.25) +
+  facet_wrap(~ year)
+data_full %>% 
+  filter(total_claims_16 != total_claims_17 | is.na(total_claims_16) | is.na(total_claims_17)) %>% 
+  gather("dataset", "total_claims", total_claims_16:total_claims_17) %>% 
+  filter(!is.na(total_claims)) %>% 
+  group_by(generic_name, year, dataset) %>% 
+  summarize(total_claims = sum(total_claims)) %>% 
+  ungroup() %>% 
+  spread(dataset, total_claims) %>% 
+  filter(year != 2012 & year != 2017) %>% 
+  ggplot(aes(log(total_claims_16), log(total_claims_17))) +
+  geom_point(alpha = 0.5, size = 0.25) +
+  facet_wrap(~ year)
+```
+
+
+Looks like claim counts (and presumably other data) were changed between the 2016 and 2017 dataset
+
+
+```{r}
+names_16 <- names_16 %>% 
+  mutate(
+    alt_brand = brand_name,
+    alt_generic = generic_name,
+    alt_manu = manufacturer
+  )
+names_17 <- names_17 %>% 
+  mutate(
+    alt_brand = brand_name,
+    alt_generic = generic_name,
+    alt_manu = manufacturer
+  )
+unmatched <- data_full %>% 
+  filter(is.na(total_claims_16) | is.na(total_claims_17)) %>% 
+  arrange(brand_name, generic_name, manufacturer, year) %>% 
+  filter(year != 2017 & year != 2012)
+#write_csv(unmatched, "./unmatched_partd_16_17.csv")
+unmatched %>% 
+  filter(brand_name == "abelcet")
+names_16 %>% 
+  filter(manufacturer == "sigma-tau" | manufacturer == "sigma-tau/leadi") %>% 
+  count(manufacturer)
+names_17 %>% 
+  filter(manufacturer == "sigma-tau" | manufacturer == "sigma-tau/leadi") %>% 
+  count(manufacturer)
+### 1. change manu in 2016 dataset from "sigma-tau" -> "sigma-tau/leadi" for abelcet
+unmatched %>% 
+  filter(brand_name == "acarbose")
+names_16 %>% 
+  filter(manufacturer == "actavis pharma" | manufacturer == "actavis pharma/") %>% 
+  count(manufacturer)
+names_17 %>% 
+  filter(manufacturer == "actavis pharma" | manufacturer == "actavis pharma/") %>% 
+  count(manufacturer)
+# actavis was bought up by Teva pharmaceuticals in 2016 - maybe that's why there's a /
+names_16 %>% 
+  filter(str_detect(manufacturer, "teva")) %>% 
+  count(manufacturer) %>% 
+  arrange(manufacturer)
+names_17 %>% 
+  filter(str_detect(manufacturer, "teva")) %>% 
+  count(manufacturer) %>%
+  arrange(manufacturer)
+actavis_dbl <- names_17 %>% 
+  filter(manufacturer == "actavis pharma" | manufacturer == "actavis pharma/") %>% 
+  select(brand_name:manufacturer) %>% 
+  distinct() %>% 
+  count(brand_name, generic_name) %>% 
+  filter(n != 1)
+names_17 %>% 
+  semi_join(actavis_dbl, by = c("brand_name", "generic_name")) %>% 
+  filter(manufacturer == "actavis pharma" | manufacturer == "actavis pharma/") 
+### 2. have to be careful here -> for brand_name, generic_name == "acarbose" only -> change manu to actavis pharma/ in 2016 data
+unmatched %>% 
+  filter(brand_name == "acetaminophen-codeine")
+# another acquisition/merger -> qalitest merged with par pharmaceuticals in 2016 - ceased to exist as a company - related to Endo pharmaceuticals
+### 3. for 2016 dataset "acetaminophen-codeine" / acetaminophen with codeine / qualitest -> change manu to qualitest/par p
+unmatched %>% 
+  filter(brand_name == "acetazolamide")
+# barr was acquired by teva in 2008
+### 4. acetazolamide / acetazolamide / barr in 2016 dataset -> manu to teva usa
+# same qualitest issue for acetic acid
+unmatched %>% 
+  filter(brand_name == "acetic acid" & str_detect(manufacturer, "qualitest"))
+### 5. acetic acid / acetic acid/ qualitest in 2016 -> change to qualitest/par p
+unmatched %>% 
+  filter(brand_name == "acetic acid" & str_detect(manufacturer, "hospira"))
+# hospira was acquired by pfizer in 2014, but a portion was later sold to icu medical
+### 6. acetic acid / acetic acid / hospira in 2016 -> change to hospira/icu med
+unmatched %>% 
+  filter(brand_name == "acetylcysteine" & str_detect(manufacturer, "hospira"))
+### 7. acetylcysteine / acetylcysteine / hospira 2016 -> hospira/pfizer
+unmatched %>% 
+  filter(brand_name == "aciphex sprinkle")
+# fsc labs no longer exists - known as avadel now
+# potential problem:
+names_16 %>% 
+  filter(str_detect(manufacturer, "fsc"))
+names_16 %>% 
+  filter(str_detect(manufacturer, "avadel"))
+### 8. aciphex sprinkle / rabeprazole sodium / fsc labs 2016 -> avadel pharmace
+unmatched %>% 
+  filter(brand_name == "acyclovir" & str_detect(manufacturer, "actavis"))
+### 9. acyclovir / acyclovir / actavis pharma 2016 -> actavis pharma/
+# a lot of acyclovir data from 2016 set not matched in 2017 set
+unmatched %>% 
+  filter(brand_name == "adapalene")
+### 10. same actavis issue
+names_16 <- names_16 %>% 
+  mutate(
+    alt_manu = case_when(
+      brand_name == "abelcet" ~ "sigma-tau/leadi",
+      brand_name == "acarbose" & generic_name == "acarbose" & manufacturer == "actavis pharma" ~ "actavis pharma/",
+      brand_name == "acetaminophen-codeine" & generic_name == "acetaminophen with codeine" & manufacturer == "qualitest" ~ "qualitest/par p",
+      brand_name == "acetazolamide" & generic_name == "acetazolamide" & manufacturer == "barr" ~ "teva usa",
+      brand_name == "acetic acid" & generic_name == "acetic acid" & manufacturer == "qualitest" ~ "qualitest/par p",
+      brand_name == "acetic acid" & generic_name == "acetic acid" & manufacturer == "hospira" ~ "hospira/icu med",
+      brand_name == "acetylcysteine" & generic_name == "acetylcysteine" & manufacturer == "hospira" ~ "hospira/pfizer",
+      brand_name == "aciphex sprinkle" & generic_name == "rabeprazole sodium" & manufacturer == "fsc labs" ~ "avadel pharmace",
+      brand_name == "acyclovir" & generic_name == "acyclovir" & manufacturer == "actavis pharma" ~ "actavis pharma/",
+      brand_name == "adapalene" & generic_name == "adapalene" & manufacturer == "actavis pharma" ~ "actavis pharma/",
+      TRUE ~ alt_manu
+      )
+    )
+# start: 5631, now:
+names_16 %>% select(alt_brand:alt_manu) %>% distinct() %>% 
+  inner_join(
+    names_17 %>% select(alt_brand:alt_manu) %>% distinct(),
+    by = c("alt_brand", "alt_generic", "alt_manu")
+    ) %>% 
+  nrow()
+unmatched %>% 
+  filter(brand_name == "afeditab cr")
+### 11. afeditab cr / nifedipine / actavis pharma 2016 -> actavis pharma/
+unmatched %>% 
+  filter(brand_name == "albuterol sulfate" & str_detect(manufacturer, "actavis"))
+### 12. albuterol sulfate / albuterol sulfate / actavis pharma 2016 -> actavis pharma/
+unmatched %>% 
+  filter(brand_name == "aldactazide")
+### 13. aldactazide / spironolact/hydrochlorothiazid / pharmacia/upjhn 2016 -> pharmaci/pfizer
+unmatched %>% 
+  filter(brand_name == "aldactone")
+### 14. aldactone / spironolactone / pharmacia/upjhn 2016 -> pharmaci/pfizer
+unmatched %>% 
+  filter(brand_name == "alendronate sodium" & str_detect(manufacturer, "actavis pharma"))
+### 15. alendronate sodium / alendronate sodium / actavis pharma 2016 -> actavis pharma/
+unmatched %>% 
+  filter(brand_name == "alendronate sodium" & str_detect(manufacturer, "impax"))
+### 16. alendronate sodium / alendronate sodium / teva usa/impax 2016 -> actavis/impax g
+unmatched %>% 
+  filter(brand_name == "allopurinol" & str_detect(manufacturer, "actavis"))
+### 17. allopurinol / allopurinol/ actavis pharma 2016 -> actavis pharma/
+unmatched %>% 
+  filter(brand_name == "allopurinol" & str_detect(manufacturer, "qualitest"))
+### 18. allopurinol / allopurinol / qualitest 2016 -> qualitest/par p
+unmatched %>% 
+  filter(brand_name == "alosetron hcl")
+### 19. alosetron hcl / alosetron hcl / actavis pharma 2016 -> actavis pharma/
+unmatched %>% 
+  filter(brand_name == "alprazolam er")
+### 20. alprazolam er / alprazolam / actavis pharma 2016 -> actavis pharma/
+unmatched %>% 
+  filter(brand_name == "alprazolam odt")
+### 21. alprazolam odt / alprazolam / actavis pharma 2016 -> actavis pharma/
+names_16 <- names_16 %>% 
+  mutate(
+    alt_manu = case_when(
+      brand_name == "afeditab cr" & generic_name == "nifedipine" & manufacturer == "actavis pharma" ~ "actavis pharma/",
+      brand_name == "albuterol sulfate" & generic_name == "albuterol sulfate" & manufacturer == "actavis pharma" ~ "actavis pharma/",
+      brand_name == "aldactazide" & generic_name == "spironolact/hydrochlorothiazid" & manufacturer == "pharmacia/upjhn" ~ "pharmaci/pfizer",
+      brand_name == "aldactone" & generic_name == "spironolactone" & manufacturer == "pharmacia/upjhn" ~ "pharmaci/pfizer",
+      brand_name == "alendronate sodium" & generic_name == "alendronate sodium" & manufacturer == "actavis pharma" ~ "actavis pharma/",
+      brand_name == "alendronate sodium" & generic_name == "alendronate sodium" & manufacturer == "teva usa/impax" ~ "actavis/impax g",
+      brand_name == "allopurinol" & generic_name == "allopurinol" & manufacturer == "actavis pharma" ~ "actavis pharma/",
+      brand_name == "allopurinol" & generic_name == "allopurinol" & manufacturer == "qualitest" ~ "qualitest/par p",
+      brand_name == "alosetron hcl" & generic_name == "alosetron hcl" & manufacturer == "actavis pharma" ~ "actavis pharma/",
+      brand_name == "alprazolam er" & generic_name == "alprazolam" & manufacturer == "actavis pharma" ~ "actavis pharma/",
+      brand_name == "alprazolam odt" & generic_name == "alprazolam" & manufacturer == "actavis pharma" ~ "actavis pharma/",
+      TRUE ~ alt_manu
+    )
+  )
+names_16 %>% select(alt_brand:alt_manu) %>% distinct() %>% 
+  inner_join(
+    names_17 %>% select(alt_brand:alt_manu) %>% distinct(),
+    by = c("alt_brand", "alt_generic", "alt_manu")
+    ) %>% 
+  nrow()
+unmatched %>% 
+  filter(brand_name == "alvesco")
+### 22. alvesco / ciclesonide / sunovion pharma 2016 -> sunovion/covis (company divestment)
+unmatched %>% 
+  filter(brand_name == "amantadine")
+# numbers are very close
+names_16 %>% 
+  filter(str_detect(manufacturer, "upsher smith") | str_detect(manufacturer, "upsher-smith")) %>% 
+  count(manufacturer)
+names_17 %>% 
+  filter(str_detect(manufacturer, "upsher smith") | str_detect(manufacturer, "upsher-smith")) %>% 
+  count(manufacturer)
+# can change upsher smith to upsher smith la safely?
+unmatched %>% 
+  filter(str_detect(manufacturer, "upsher smith") | str_detect(manufacturer, "upsher-smith")) %>% 
+  gather("dataset_year", "total_claims", total_claims_16:total_claims_17) %>% 
+  filter(!is.na(total_claims)) %>% 
+  mutate(
+    manufacturer = case_when(
+      manufacturer == "upsher smith" ~ "upsher smith la", 
+      str_detect(manufacturer, "upsher-smith") ~ "upsher smith la", 
+      TRUE ~ manufacturer
+      )
+    ) %>% 
+  # duplicates found with different total claim counts
+  slice(-153:-155) %>% 
+  spread(dataset_year, total_claims) %>% 
+  ggplot(aes(log(total_claims_16), log(total_claims_17))) +
+  geom_point() +
+  facet_wrap(~ year)
+### 23. change upsher smith (2016) -> upsher smith la
+### 24. change upser-smith la (2017) -> upsher smith la (will cause double for 1 drug resolve later)
+names_16 <- names_16 %>% 
+  mutate(
+    alt_manu = case_when(
+      brand_name == "alvesco" & generic_name == "ciclesonide" & manufacturer == "sunovion pharma" ~ "sunovion/covis",
+      manufacturer == "upsher smith" ~ "upsher smith la",
+      TRUE ~ alt_manu
+      )
+    )
+names_17 <- names_17 %>% 
+  mutate(alt_manu = ifelse(manufacturer == "upsher-smith la", "upsher smith la", alt_manu))
+names_16 %>% select(alt_brand:alt_manu) %>% distinct() %>% 
+  inner_join(
+    names_17 %>% select(alt_brand:alt_manu) %>% distinct(),
+    by = c("alt_brand", "alt_generic", "alt_manu")
+    ) %>% 
+  nrow()
+unmatched %>% 
+  filter(brand_name == "amethyst")
+### 25. amethyst / levonorgestrel-ethin estradiol / actavis pharma (2016) -> actavis pharma/
+unmatched %>% 
+  filter(brand_name == "amiloride-hydrochlorothiazide")
+# should check if barr is completely gone from 2017 dataset
+names_17 %>% 
+  filter(str_detect(manufacturer, "barr")) %>% 
+  inner_join(names_16, by = c("brand_name", "generic_name", "manufacturer", "year"), suffix = c("_17", "_16")) %>% 
+  ggplot(aes(log(total_claims_17), log(total_claims_16))) + 
+  geom_point()
+# barr is not totally gone from the 2017 dataset, can't blanket change name
+### 26. amiloride-hydrochlorothiazide / amiloride/hydrochlorothiazide / barr (2016) -> teva usa
+unmatched %>% 
+  filter(brand_name == "amitriptyline hcl")
+### 27. amitriptyline hcl / amitriptyline hcl / qualitest (2016) -> qualitest/par p
+unmatched %>% 
+  filter(brand_name == "amlodipine-valsartan") %>% 
+  gather("data_year", "total_claims", total_claims_16:total_claims_17) %>% 
+  filter(!(is.na(total_claims))) %>% 
+  mutate(generic_name = ifelse(generic_name == "amlodipine/valsartan", "amlodipine besylate/valsartan", generic_name)) %>% 
+  spread(data_year, total_claims) %>% 
+  filter(total_claims_16 != total_claims_17 | is.na(total_claims_16) | is.na(total_claims_17))
+### 28. change generic name "amlodipine/valsartan" (for brand name amlodipine-valsartan) in 2016 to "amlodipine besylate/valsartan"
+unmatched %>% 
+  filter(brand_name == "amlodipine besylate")
+names_17 %>% 
+  filter(str_detect(manufacturer, "qualitest")) %>% 
+  select(alt_brand:alt_manu) %>% 
+  distinct() %>% 
+  count(alt_brand, alt_generic) %>% 
+  filter(n != 1)
+names_16 %>% 
+  filter(str_detect(manufacturer, "qualitest")) %>% 
+  select(alt_brand:alt_manu) %>% 
+  distinct() %>% 
+  count(alt_brand, alt_generic) %>% 
+  filter(n != 1)
+names_17 %>% 
+  filter(brand_name == "baclofen", generic_name == "baclofen" & str_detect(manufacturer, "qual"))
+names_17 %>% 
+  filter(brand_name == "phenobarbital", generic_name == "phenobarbital" & str_detect(manufacturer, "qual"))
+### 29. amlodipine besylate / amlodipine besylate / qualitest (2016) -> qualitest/par p
+unmatched %>% 
+  filter(brand_name == "amlodipine besylate-benazepril" & str_detect(manufacturer, "actavis"))
+### 30. amlodipine besylate-benazepril / amlodipine besylate/benazepril / actavis pharma (2016) -> actavis pharma/
+
+names_16 <- names_16 %>% 
+  mutate(
+    alt_manu = case_when(
+      brand_name == "amethyst" & generic_name == "levonorgestrel-ethin estradiol" & str_detect(manufacturer, "actavis pharma") ~ "actavis pharma/",
+      brand_name == "amiloride-hydrochlorothiazide" & generic_name == "amiloride/hydrochlorothiazide" & str_detect(manufacturer, "barr") ~ "teva usa",
+      brand_name == "amitriptyline hcl" & generic_name == "amitriptyline hcl" & str_detect(manufacturer, "qualitest") ~ "qualitest/par p",
+      brand_name == "amlodipine besylate" & generic_name == "amlodipine besylate" & str_detect(manufacturer, "qualitest") ~ "qualitest/par p",
+      brand_name == "amlodipine besylate-benazepril" & generic_name == "amlodipine besylate/benazepril" & str_detect(manufacturer, "actavis") ~ "actavis pharma/",
+      TRUE ~ alt_manu
+      ),
+    alt_generic = ifelse(generic_name == "amlodipine/valsartan" & brand_name == "amlodipine-valsartan", "amlodipine besylate/valsartan", alt_generic)
+    )
+# new match count
+names_16 %>% select(alt_brand:alt_manu) %>% distinct() %>% 
+  inner_join(
+    names_17 %>% select(alt_brand:alt_manu) %>% distinct(),
+    by = c("alt_brand", "alt_generic", "alt_manu")
+    ) %>% 
+  nrow()
+
+unmatched %>% 
+  filter(brand_name == "amoxapine")
+### 31. amoxapine / amoxapine / actavis pharma (2016) -> actavis pharma/
+unmatched %>% 
+  filter(brand_name == "amoxicillin" & str_detect(manufacturer, "qualitest"))
+### 32. amoxicillin / amoxicillin / qualitest ->  qualitest/par p
+unmatched %>% 
+  filter(brand_name == "ampicillin trihydrate")
+### 33. ampicillin trihydrate / ampicillin trihydrate / qualitest (2016) -> qualitest/par p
+unmatched %>% 
+  filter(brand_name == "anadrol-50")
+### 34. anadrol-50 / oxymetholone / meda pharmaceut (2016) -> meda/mylan spec
+unmatched %>% 
+  filter(brand_name == "aripiprazole" & str_detect(manufacturer, "silarx"))
+names_16 %>% 
+  filter(str_detect(manufacturer, "silarx")) %>% 
+  count(manufacturer)
+names_17 %>% 
+  filter(str_detect(manufacturer, "silarx")) %>% 
+  count(manufacturer)
+names_16 %>% 
+  filter(str_detect(manufacturer, "silarx")) %>% 
+  select(alt_brand:alt_manu, year:total_claims) %>% 
+  full_join(
+    names_17 %>% 
+      filter(str_detect(manufacturer, "silarx")) %>% 
+      select(alt_brand:alt_manu, year:total_claims),
+    by = c("alt_brand", "alt_generic", "alt_manu", "year"),
+    suffix = c("_16", "_17")
+  ) %>% 
+  gather("data_year", "total_claims", total_claims_16:total_claims_17) %>% 
+  filter(!is.na(total_claims)) %>% 
+  mutate(alt_manu = ifelse(alt_manu == "silarx pharm", "silarx/lannett", alt_manu)) %>% 
+  spread(data_year, total_claims) %>% 
+  ggplot(aes(total_claims_16, total_claims_17)) +
+  geom_point()
+### 35. change manufacturer in 2016 data from  "silarx pharm" -> "silarx/lannett"
+unmatched %>% 
+  filter(brand_name == "aromasin")
+names_16 %>% 
+  filter(manufacturer == "pharmacia/upjhn" | manufacturer == "pharmaci/pfizer") %>% 
+  count(manufacturer)
+names_17 %>% 
+  filter(manufacturer == "pharmacia/upjhn" | manufacturer == "pharmaci/pfizer") %>% 
+  count(manufacturer)
+names_16 %>% 
+  filter(manufacturer == "pharmacia/upjhn" | manufacturer == "pharmaci/pfizer") %>%
+  select(alt_brand:alt_manu, year:total_claims) %>% 
+  full_join(
+    names_17 %>% 
+      filter(manufacturer == "pharmacia/upjhn" | manufacturer == "pharmaci/pfizer") %>% 
+      select(alt_brand:alt_manu, year:total_claims),
+    by = c("alt_brand", "alt_generic", "alt_manu", "year"),
+    suffix = c("_16", "_17")
+  ) %>% 
+  gather("data_year", "total_claims", total_claims_16:total_claims_17) %>% 
+  filter(!is.na(total_claims)) %>% 
+  mutate(alt_manu = ifelse(alt_manu == "pharmacia/upjhn", "pharmaci/pfizer", alt_manu)) %>% 
+  spread(data_year, total_claims) %>% 
+  ggplot(aes(log(total_claims_16), log(total_claims_17))) +
+  geom_point()
+# close enough
+### 36. change manufacturer in 2016 data from "pharmacia/upjhn" -> "pharmaci/pfizer"
+unmatched %>% 
+  filter(brand_name == "astepro")
+names_16 %>% 
+  filter(manufacturer == "meda pharmaceut" | manufacturer == "meda/mylan spec") %>% 
+  count(manufacturer)
+names_17 %>% 
+  filter(manufacturer == "meda pharmaceut" | manufacturer == "meda/mylan spec") %>% 
+  count(manufacturer)
+names_16 %>% 
+  filter(manufacturer == "meda pharmaceut" | manufacturer == "meda/mylan spec") %>%
+  select(alt_brand:alt_manu, year:total_claims) %>% 
+  full_join(
+    names_17 %>% 
+      filter(manufacturer == "meda pharmaceut" | manufacturer == "meda/mylan spec") %>% 
+      select(alt_brand:alt_manu, year:total_claims),
+    by = c("alt_brand", "alt_generic", "alt_manu", "year"),
+    suffix = c("_16", "_17")
+  ) %>% 
+  gather("data_year", "total_claims", total_claims_16:total_claims_17) %>% 
+  filter(!is.na(total_claims)) %>% 
+  mutate(alt_manu = ifelse(alt_manu == "meda pharmaceut", "meda/mylan spec", alt_manu)) %>% 
+  spread(data_year, total_claims) %>% 
+  ggplot(aes(log(total_claims_16), log(total_claims_17))) +
+  geom_point()
+### 37. change manufacturer in 2016 from "meda pharmaceut" to "meda/mylan spec"
+unmatched %>% 
+  filter(brand_name == "atenolol-chlorthalidone")
+### 38. atenolol-chlorthalidone / atenolol/chlorthalidone / actavis pharma (2016) -> actavis pharma/
+unmatched %>% 
+  filter(brand_name == "atorvastatin calcium")
+# sun pharmaceuticals acquired majority interest in ranbaxy and ohm
+names_16 %>% 
+  filter(manufacturer == "ranbaxy pharmac" | manufacturer == "ohm/sun pharmac") %>% 
+  count(manufacturer)
+names_17 %>% 
+  filter(manufacturer == "ranbaxy pharmac" | manufacturer == "ohm/sun pharmac") %>% 
+  count(manufacturer)
+# shouldn't blanket change manu name - change back to ranbaxy to match 2016
+### 39. atorvastatin calcium / atorvastatin calcium / ohm/sun pharmac (2017) -> "ranbaxy pharmac"
+unmatched %>% 
+  filter(brand_name == "atripla")
+### 40. change generic name in 2016 to efavirenz/emtricit/tenofovr df to match
+
+### changes 31-40
+names_16 <- names_16 %>% 
+  mutate(
+    alt_manu = case_when(
+      brand_name == "amoxapine" & generic_name == "amoxapine" & manufacturer == "actavis pharma" ~ "actavis pharma/",
+      brand_name == "amoxicillin" & generic_name == "amoxicillin" & manufacturer == "qualitest" ~ "qualitest/par p",
+      brand_name == "ampicillin trihydrate" & generic_name == "ampicillin trihydrate" & manufacturer == "qualitest" ~ "qualitest/par p",
+      manufacturer == "silarx pharm" ~ "silarx/lannett",
+      manufacturer == "pharmacia/upjhn" ~ "pharmaci/pfizer",
+      manufacturer == "meda pharmaceut" ~ "meda/mylan spec",
+      brand_name == "atenolol-chlorthalidone" & generic_name == "atenolol/chlorthalidone" & manufacturer == "actavis pharma" ~ "actavis pharma/",
+      TRUE ~ alt_manu
+    ),
+    alt_generic = ifelse(brand_name == "atripla", "efavirenz/emtricit/tenofovr", alt_generic)
+  )
+names_17 <- names_17 %>% 
+  mutate(alt_manu = ifelse(
+    brand_name == "atorvastatin calcium" & generic_name == "atorvastatin calcium" & manufacturer == "ohm/sun pharmac",
+    "ranbaxy pharmac", alt_manu
+    ))
+names_16 %>% select(alt_brand:alt_manu) %>% distinct() %>% 
+  inner_join(
+    names_17 %>% select(alt_brand:alt_manu) %>% distinct(),
+    by = c("alt_brand", "alt_generic", "alt_manu")
+    ) %>% 
+  nrow()
+
+unmatched %>% 
+  filter(brand_name == "aygestin")
+### 41. aygestin / norethindrone acetate / duramed/barr (2016) -> teva women's he
+names_17 %>% 
+  filter(generic_name == "baclofen" & str_detect(alt_manu, "qualitest"))
+names_16 %>% 
+  filter(generic_name == "baclofen" & str_detect(alt_manu, "qualitest"))
+# looks ike the 2017 data is roughly the sum of both manu names
+### 42. just change the manu names across both datasets: qualitest -> qualitest/par p
+### 43. actavis pharma -> actavis pharma/
+### 41 - 43 changes
+names_16 <- names_16 %>% 
+  mutate(
+    alt_manu = case_when(
+      alt_manu == "qualitest" ~ "qualitest/par p",
+      alt_manu == "actavis pharma" ~ "actavis pharma/",
+      brand_name == "aygestin" ~ "teva women's he",
+      TRUE ~ alt_manu
+      )
+    )
+names_17 <- names_17 %>% 
+  mutate(
+    alt_manu = case_when(
+      alt_manu == "actavis pharma" ~ "actavis pharma/",
+      alt_manu == "qualitest" ~ "qualitest/par p",
+      TRUE ~ alt_manu
+    )
+  )
+names_16 %>% select(alt_brand:alt_manu) %>% distinct() %>% 
+  inner_join(
+    names_17 %>% select(alt_brand:alt_manu) %>% distinct(),
+    by = c("alt_brand", "alt_generic", "alt_manu")
+    ) %>% 
+  nrow()
+
+names_16 %>% 
+  filter(brand_name == "benztropine mesylate") %>% 
+  count(alt_manu)
+names_17 %>% 
+  filter(brand_name == "benztropine mesylate") %>% 
+  count(alt_manu)
+# pliva inc has ~170k claims in 2016 dataset which seem to be just gone in 2017 data?
+names_16 %>% 
+  filter(brand_name == "benztropine mesylate" & year != 2012) %>% 
+  summarize(claims_sum = sum(total_claims))
+names_17 %>% 
+  filter(brand_name == "benztropine mesylate" & year != 2017) %>% 
+  summarize(claims_sum = sum(total_claims))
+# don't know what happened here
+unmatched %>% 
+  filter(brand_name == "betamethasone acetate-sod phos")
+# generic name mismatch
+### 44. betamethasone acetate-sod phos / betameth acet/betamet sod phos (2016) -> generic_name betamethasone acetate,sod phos
+unmatched %>% 
+  filter(brand_name == "bethanechol chloride" & (manufacturer == "pliva, inc" | manufacturer == "teva usa"))
+### 45. bethanechol chloride / bethanechol chloride / "pliva, inc" (2016) -> "teva usa"
+unmatched %>% 
+  filter(brand_name == "bidil") %>%
+  select(generic_name) %>% 
+  count(generic_name)
+# typo: should be Isosorbide - 2016 is wrong
+### 46. bidil / isosorbibe dinit/hydralazine / arbor pharmaceu (2016) -> change generic to isosorbide dinit/hydralazine
+unmatched %>% 
+  filter(brand_name == "bisoprolol-hydrochlorothiazide") %>% 
+  count(generic_name)
+### 47. bisoprolol-hydrochlorothiazide - change generic name from bisoprol/hydrochlorothiazide (2016) to bisoprolol/hydrochlorothiazide
+unmatched %>% 
+  filter(brand_name == "bivigam")
+names_16 %>% 
+  filter(manufacturer == "biotest pharmac" | manufacturer == "biotest/adma")
+names_17 %>% 
+  filter(manufacturer == "biotest pharmac" | manufacturer == "biotest/adma")
+### 48. change manufacturer "biotest pharmac" (2016) -> "biotest/adma"
+unmatched %>% 
+  filter(brand_name == "bumetanide" & str_detect(manufacturer, "hospira"))
+# hospira is one of the manufacturers that may be tricky to blanket change - some went to hospira/pfizer and some when to hospira/icu med
+names_16 %>% 
+  filter(str_detect(manufacturer, "hospira")) %>%
+  count(manufacturer)
+names_17 %>% 
+  filter(str_detect(manufacturer, "hospira")) %>%
+  count(manufacturer)
+### 49. 2017 change hospira-novaplu -> hospira/novaplu
+### 50. fix 2016 hospira -> hospira/pfizer (easiest and most straightforward)
+hospira_to_pfizer <- unmatched %>% 
+  filter(str_detect(manufacturer, "hospira")) %>% 
+  count(brand_name, generic_name, manufacturer) %>% 
+  spread(manufacturer, n) %>% 
+  filter(!is.na(hospira) & is.na(`hospira-novaplu`) & is.na(`hospira/icu med`) & is.na(`hospira/novaplu`) & !is.na(`hospira/pfizer`))
+hospira_pfizer_fix <- names_16 %>% 
+  semi_join(hospira_to_pfizer, by = c("brand_name", "generic_name")) %>% 
+  filter(alt_manu == "hospira") %>% 
+  mutate(alt_manu = "hospira/pfizer")
+### 51. fix 2016 hospira -> hospira/ic med
+hospira_to_icumed <- unmatched %>% 
+  filter(str_detect(manufacturer, "hospira")) %>% 
+  count(brand_name, generic_name, manufacturer) %>% 
+  spread(manufacturer, n) %>% 
+  filter(!is.na(hospira) & is.na(`hospira-novaplu`) & !is.na(`hospira/icu med`) & is.na(`hospira/novaplu`) & is.na(`hospira/pfizer`))
+hospira_icumed_fix <- names_16 %>% 
+  semi_join(hospira_to_icumed, by = c("brand_name", "generic_name")) %>% 
+  filter(alt_manu == "hospira") %>% 
+  mutate(alt_manu = "hospira/icu med")
+### changes 44-51
+names_16 <- names_16 %>% 
+  anti_join(hospira_pfizer_fix, by = c("brand_name", "generic_name", "manufacturer")) %>% 
+  bind_rows(hospira_pfizer_fix) %>% 
+  anti_join(hospira_icumed_fix, by = c("brand_name", "generic_name", "manufacturer")) %>% 
+  bind_rows(hospira_icumed_fix)
+names_16 <- names_16 %>% 
+  mutate(
+    alt_generic = case_when(
+      brand_name == "betamethasone acetate-sod phos" & generic_name == "betameth acet/betamet sod phos" ~ "betamethasone acetate,sod phos",
+      brand_name == "bidil" & generic_name == "isosorbibe dinit/hydralazine" ~ "isosorbide dinit/hydralazine",
+      brand_name == "bisoprolol-hydrochlorothiazide" ~ "bisoprolol/hydrochlorothiazide",
+      TRUE ~ alt_generic
+    ),
+    alt_manu = case_when(
+      brand_name == "bethanechol chloride" & generic_name == "bethanechol chloride" & manufacturer == "pliva, inc" ~ "teva usa",
+      manufacturer == "biotest pharmac" ~ "biotest/adma",
+      TRUE ~ alt_manu
+    )
+  )
+names_17 <- names_17 %>% 
+  mutate(alt_manu = ifelse(alt_manu == "hospira-novaplu", "hospira/novaplu", alt_manu))
+names_16 %>% select(alt_brand:alt_manu) %>% distinct() %>% 
+  inner_join(
+    names_17 %>% select(alt_brand:alt_manu) %>% distinct(),
+    by = c("alt_brand", "alt_generic", "alt_manu")
+    ) %>% 
+  nrow()
+unmatched %>% 
+  filter(brand_name == "camila")
+### 52. camila / norethindrone / barr (2016) -> manufacturer teva/mayne phar
+unmatched %>% 
+  filter(brand_name == "carbinoxamine maleate")
+### 53. carbinoxamine maleate / carbinoxamine maleate / boca pharmacal/ (2016) -> par pharm.
+unmatched %>% 
+  filter(brand_name == "carnitor")
+names_16 %>% 
+  filter(str_detect(brand_name, "carnitor")) %>% 
+  count(brand_name, generic_name, alt_manu)
+names_17 %>% 
+  filter(str_detect(brand_name, "carnitor")) %>% 
+  count(brand_name, generic_name, alt_manu)
+### 53. for drugs with carnitor in brand name -> change manu to sigma-tau/leadi
+unmatched %>% 
+  filter(brand_name == "carvedilol" & (manufacturer == "acetris health" | manufacturer == "lucid pharma ll"))
+names_16 %>% 
+  filter(manufacturer == "acetris health" | manufacturer == "lucid pharma ll") %>% 
+  count(alt_manu)
+names_17 %>% 
+  filter(manufacturer == "acetris health" | manufacturer == "lucid pharma ll") %>% 
+  count(alt_manu)
+# another pharma merger/acquisition
+### 54. change manu lucid pharma ll (2016) to acetris health
+unmatched %>% 
+  filter(brand_name == "cefdinir" & (manufacturer == "karalex pharma," | manufacturer == "orchidpharma, i"))
+# karalex was acquired by orchid pharma in 2010
+### 55. change manu karalex pharma,  (2016) -> orchidpharma, i 
+unmatched %>% 
+  filter(brand_name == "ceftriaxone")
+# numbers match exactly between 2016 hospira and 2017 hospira/pfizer
+### 56. ceftriaxone / ceftriaxone sodium / hospira (2016) -> hospira/pfizer
+unmatched %>% 
+  filter(brand_name == "chlordiazepoxide hcl")
+### 57. chlordiazepoxide hcl / chlordiazepoxide hcl / barr (2016) -> teva usa
+unmatched %>% 
+  filter(brand_name == "ciprofloxacin-d5w") %>% 
+  count(generic_name)
+### 58. brand name: ciprofloxacin-d5w  change generic from ciprofloxacin lactate/d5w (2016) -> ciprofloxacin in 5 % dextrose
+unmatched %>% 
+  filter(brand_name == "ciprofloxacin hcl" & (manufacturer == "blu pharmaceuti" | manufacturer == "puracap laborat"))
+# blu was acquired by purecap in 2016
+names_16 %>% 
+  filter(manufacturer == "blu pharmaceuti" | manufacturer == "puracap laborat") %>%
+  select(alt_brand:alt_manu, year:total_claims) %>% 
+  full_join(
+    names_17 %>% 
+      filter(manufacturer == "blu pharmaceuti" | manufacturer == "puracap laborat") %>% 
+      select(alt_brand:alt_manu, year:total_claims),
+    by = c("alt_brand", "alt_generic", "alt_manu", "year"),
+    suffix = c("_16", "_17")
+  ) %>% 
+  filter(year != 2012 & year != 2017) %>% 
+  gather("data_year", "total_claims", total_claims_16:total_claims_17) %>% 
+  filter(!is.na(total_claims)) %>% 
+  mutate(alt_manu = ifelse(alt_manu == "blu pharmaceuti", "puracap laborat", alt_manu)) %>% 
+  slice(-28:-31) %>% 
+  spread(data_year, total_claims) %>% 
+  ggplot(aes(log(total_claims_16), log(total_claims_17))) +
+  geom_point()
+### 59. in both 2016 and 2017 change blu pharmaceuti -> puracap laborat
+unmatched %>% 
+  filter(brand_name == "claravis")
+### 60. claravis / isotretinoin / barr (2016) -> teva usa
+### changes 52-60
+names_16 <- names_16 %>% 
+  mutate(
+    alt_manu = case_when(
+      brand_name == "camila" & generic_name == "norethindrone" & manufacturer == "barr" ~ "teva/mayne phar",
+      str_detect(brand_name, "carnitor") ~ "sigma-tau/leadi",
+      alt_manu == "lucid pharma ll" ~ "acetris health",
+      alt_manu == "karalex pharma," ~ "orchidpharma, i",
+      brand_name == "ceftriaxone" & generic_name == "ceftriaxone sodium" & manufacturer == "hospira" ~ "hospira/pfizer",
+      brand_name == "chlordiazepoxide hcl" & generic_name == "chlordiazepoxide hcl" & manufacturer == "barr" ~ "teva usa",
+      manufacturer == "blu pharmaceuti" ~ "puracap laborat",
+      brand_name == "claravis" & generic_name == "isotretinoin" & manufacturer == "barr" ~ "teva usa",
+      TRUE ~ alt_manu
+    ),
+    alt_generic = ifelse(brand_name == "ciprofloxacin-d5w", "ciprofloxacin in 5 % dextrose", alt_generic)
+  )
+names_17 <- names_17 %>% 
+  mutate(alt_manu = ifelse(manufacturer == "blu pharmaceuti", "puracap laborat", alt_manu))
+unmatched %>% 
+  filter(brand_name == "clarithromycin er" & str_detect(manufacturer, "teva"))
+### 61. clarithromycin er / clarithromycin / teva usa (2016) -> teva/mayne phar
+unmatched %>%
+  filter(brand_name == "clinimix e")
+### 62. brand: clinimix e, change generic from aa 5 %/calcium/lytes/dext 15 % (2016) -> aa 5%/d15w/electrolytes
+unmatched %>%
+  filter(brand_name == "clinpro 5000")
+names_16 %>%
+  filter(generic_name == "sodium fluoride" | generic_name == "fluoride (sodium)") %>% 
+  count(generic_name)
+names_17 %>%
+  filter(generic_name == "sodium fluoride" | generic_name == "fluoride (sodium)") %>% 
+  count(generic_name)
+names_17 %>%
+  filter(brand_name == "sodium fluoride" | brand_name == "fluoride (sodium)") %>% 
+  count(brand_name, generic_name)
+### 63. for generic fluoride (sodium) (2017) change to sodium fluoride
+unmatched %>% 
+  filter(brand_name == "completenate")
+### 64. brand: completenate, change genneric pnv #14/ferrous fum/folic acid (2016) -> prenatal vit 14/iron fum/folic
+unmatched %>% 
+  filter(brand_name == "cystaran")
+### 65. cystaran / cysteamine hcl / sigma-tau (2016) -> sigma-tau/leadi
+unmatched %>% 
+  filter(brand_name == "danazol")
+### 66. danazol / danazol/ barr (2016) -> teva usa
+unmatched %>% 
+  filter(brand_name == "desmopressin acetate" & str_detect(manufacturer, "impax"))
+# there was some kind of exchange of properties between teva, impax, and allergan (actavis)
+### 67. desmopressin acetate / desmopressin acetate / teva usa/impax (2016) -> "actavis/impax g"
+unmatched %>% 
+  filter(brand_name == "dextroamphetamine sulfate" & (manufacturer == "barr" | manufacturer == "teva usa"))
+### 68. dextroamphetamine sulfate / dextroamphetamine sulfate / barr (2016) -> teva usa
+unmatched %>% 
+  filter(brand_name == "dextroamphetamine sulfate er" & (manufacturer == "barr" | manufacturer == "teva/mayne phar"))
+### 69. dextroamphetamine sulfate er / dextroamphetamine sulfate / barr (2016) -> teva/mayne phar
+unmatched %>% 
+  filter(brand_name == "dextrose in water") %>% 
+  count(generic_name, manufacturer)
+### 70. dextrose in water / dextrose 70 % in water / hospira (2016) -> hospira/icu med (already done through earlier change)
+### 71. dextrose in water / dextrose 50 % in water / hospira (2016) -> hospira/pfizer (already done through earlier change)
+unmatched %>% 
+  filter(brand_name == "dextrose in water" & generic_name == "dextrose 5 % in water")
+# looks like the 2016 data is sum of 2017 data (icu med + pfizer) - take main manufacturer
+### 72. dextrose in water / dextrose 5 % in water / hospira (2016) -> hospira/icu med
+### 73. dextrose in water / dextrose 5 % in water / hospira/pfizer (2017) -> hospira/icu med
+
+### changes 61-73
+names_16 <- names_16 %>% 
+  mutate(
+    alt_manu = case_when(
+      brand_name == "clarithromycin er" & generic_name == "clarithromycin" & manufacturer == "teva usa" ~ "teva/mayne phar",
+      brand_name == "cystaran" & generic_name == "cysteamine hcl" & manufacturer == "sigma-tau" ~ "sigma-tau/leadi",
+      brand_name == "danazol" & generic_name == "danazol" & manufacturer == "barr" ~ "teva usa",
+      brand_name == "desmopressin acetate" & generic_name == "desmopressin acetate" & manufacturer == "teva usa/impax" ~ "actavis/impax g",
+      brand_name == "dextroamphetamine sulfate" & generic_name == "dextroamphetamine sulfate" & manufacturer == "barr" ~ "teva usa",
+      brand_name == "dextroamphetamine sulfate er" & generic_name == "dextroamphetamine sulfate" & manufacturer == "barr" ~ "teva/mayne phar",
+      brand_name == "dextrose in water" & generic_name == "dextrose 5 % in water" & manufacturer == "hospira" ~ "hospira/icu med",
+      TRUE ~ alt_manu
+    ),
+    alt_generic = case_when(
+      brand_name == "clinimix e" ~ "aa 5%/d15w/electrolytes",
+      brand_name == "completenate" ~ "prenatal vit 14/iron fum/folic",
+      TRUE ~ alt_generic
+    )
+  )
+names_17 <- names_17 %>% 
+  mutate(
+    alt_manu = ifelse(brand_name == "dextrose in water" & generic_name == "dextrose 5 % in water" & manufacturer == "hospira/pfizer", "hospira/icu med", alt_manu),
+    alt_generic = ifelse(generic_name == "fluoride (sodium)", "sodium fluoride", alt_generic)
+  )
+names_16 %>% select(alt_brand:alt_manu) %>% distinct() %>% 
+  inner_join(
+    names_17 %>% select(alt_brand:alt_manu) %>% distinct(),
+    by = c("alt_brand", "alt_generic", "alt_manu")
+    ) %>% 
+  nrow()
+```
+
+
+Unmatched csv update to filter out matches already made:
+
+
+```{r unmatched_ver_2, comment=NA}
+data_full_updt2 <- names_16 %>% 
+  select(-c(brand_name:manufacturer)) %>% 
+  full_join(names_17 %>% select(-c(brand_name:manufacturer)), by = c("alt_brand", "alt_generic", "alt_manu", "year"), suffix = c("_16", "_17")) %>% 
+  select(alt_brand:alt_manu, year, everything())
+nrow(data_full)
+nrow(data_full_updt2)
+data_full_updt2 %>% 
+  filter(year != 2012 & year != 2017) %>% 
+  ggplot(aes(log(total_claims_16), log(total_claims_17))) +
+  geom_point(size = 0.5, alpha = 0.5) +
+  xlab("log(Total Claims (2016 dataset))") +
+  ylab("log(Total Claims (2017 dataset))") +
+  facet_wrap(~ year)
+unmatched_2 <- data_full_updt2 %>% 
+  filter(year != 2012 & year != 2017) %>% 
+  filter(is.na(total_claims_16) | is.na(total_claims_17) | total_claims_16 != total_claims_17) %>% 
+  arrange(alt_generic, alt_manu, alt_brand, year)
+#write_csv(unmatched_2, "./unmatched_partd_16_17_updt2.csv")
+```
+
+
+Back to matching:
+
+```{r}
+unmatched_2 %>% 
+  filter(alt_generic == "0.9 % sodium chloride" & str_detect(alt_manu, "hospira"))
+### 74. sodium chloride / 0.9 % sodium chloride / hospira/pfizer (2017) -> hospira/icu med
+### 75. sodium chloride / 0.9 % sodium chloride / hospira (2016) -> hospira/icu med
+unmatched_2 %>% 
+  filter(alt_brand == "acarbose" & str_detect(alt_manu, "global"))
+# global and impax merged in 1999
+### 76. acarbose / acarbose / global pharm (2016) -> global/impax
+### 77. acarbose / acarbose / global pharm (2017) -> global/impax
+unmatched_2 %>% 
+  filter(alt_generic == "acetaminophen/caff/dihydrocod") %>% 
+  count(alt_brand)
+```
+
+
+```{r}
+names_16 %>% 
+  select(brand_name:total_claims) %>% 
+  inner_join(
+names_16 %>% 
+  group_by(brand_name, generic_name, year) %>% 
+  summarize(tot_per_year = sum(total_claims)) %>% 
+  ungroup(),
+by = c("brand_name", "generic_name", "year")
+  ) %>% 
+  mutate(tot_per = total_claims * 100 / tot_per_year) %>% 
+  ggplot(aes(tot_per)) +
+  geom_histogram(bins = 100)
+```
+
