@@ -924,7 +924,7 @@ data_full_updt2 %>%
 unmatched_2 <- data_full_updt2 %>% 
   filter(year != 2012 & year != 2017) %>% 
   filter(is.na(total_claims_16) | is.na(total_claims_17) | total_claims_16 != total_claims_17) %>% 
-  arrange(alt_generic, alt_manu, alt_brand, year)
+  arrange(alt_generic, alt_brand, alt_manu, year)
 #write_csv(unmatched_2, "./unmatched_partd_16_17_updt2.csv")
 ```
 
@@ -942,8 +942,120 @@ unmatched_2 %>%
 ### 76. acarbose / acarbose / global pharm (2016) -> global/impax
 ### 77. acarbose / acarbose / global pharm (2017) -> global/impax
 unmatched_2 %>% 
-  filter(alt_generic == "acetaminophen/caff/dihydrocod") %>% 
-  count(alt_brand)
+  filter(alt_generic == "acetaminophen/caff/dihydrocod")
+### 78. dihydrocodein-acetaminoph-caff / acetaminophen/caff/dihydrocod / xspire pharma (2016) -> change brand to acetamin-caff-dihydrocodeine
+unmatched_2 %>%
+  filter(alt_brand == "diamox sequels")
+### 79. diamox sequels / acetazolamide / duramed/barr (2016) -> teva women's he
+unmatched_2 %>% 
+  filter(alt_brand == "zyloprim")
+### 80. zyloprim / allopurinol / prometheus labs (2016) -> prometh/casper
+unmatched_2 %>% 
+  filter(alt_brand == "exforge")
+### 81. exforge / amlodipine/valsartan / novartis (2016) -> generic to amlodipine besylate/valsartan
+unmatched_2 %>% 
+  filter(alt_brand == "gablofen")
+# small number of changes for this manufacturer
+### 82. gablofen / baclofen / mallinckrodt br (2016) -> mallinckrodt/pi
+unmatched_2 %>% 
+  filter(alt_brand == "ziac")
+### 83. ziac / bisoprol/hydrochlorothiazide / duramed/barr(2016) -> both generic and manu  to  bisoprolol/hydrochlorothiazide / teva women's he
+unmatched_2 %>% 
+  filter(alt_brand == "fioricet")
+### 84. fioricet / butalb/acetaminophen/caffeine / actavis/allerga (2016) -> actavis pharma/
+unmatched_2 %>% 
+  filter(alt_brand == "carbidopa-levodopa" & str_detect(alt_manu, "teva"))
+### 85. carbidopa-levodopa / carbidopa/levodopa / teva usa (2016) -> teva/mayne phar
+unmatched_2 %>% 
+  filter(alt_brand == "carbinoxamine maleate")
+### 86. carbinoxamine maleate / carbinoxamine maleate / boca pharmacal/ (2016) -> par pharm.
+unmatched_2 %>% 
+  filter(alt_brand == "omnaris")
+# another incomplete manufacturer name change
+names_16 %>% 
+  filter(alt_manu == "sunovion pharma" | alt_manu == "sunovion/covis") %>% 
+  count(alt_manu)
+names_17 %>% 
+  filter(alt_manu == "sunovion pharma" | alt_manu == "sunovion/covis") %>% 
+  count(alt_manu)
+### 87. omnaris / ciclesonide / sunovion pharma (2016) -> sunovion/covis
+unmatched_2 %>% 
+  filter(alt_brand == "zetonna")
+### 88. zetonna / ciclesonide / sunovion pharma (2016) -> sunovion/covis
+unmatched_2 %>% 
+  filter(alt_brand == "ciprofloxacin-d5w" & alt_manu != "sandoz")
+names_16 %>% 
+  filter(alt_manu == "claris lifescie" | alt_manu == "claris/baxter") %>% 
+  count(alt_manu)
+names_17 %>% 
+  filter(alt_manu == "claris lifescie" | alt_manu == "claris/baxter") %>% 
+  count(alt_manu)
+### 89. change manu claris lifescie (2016) -> claris/baxter
+### 90. ciprofloxacin-d5w / ciprofloxacin in 5 % dextrose / hospira (2016) -> hospira/pfizer
+
+
+#### changes 74-90
+names_17 <- names_17 %>% 
+  mutate(
+    alt_manu = case_when(
+      alt_brand == "sodium chloride" & alt_generic == "0.9 % sodium chloride" & alt_manu == "hospira/pfizer" ~ "hospira/icu med",
+      alt_brand == "acarbose" & alt_generic == "acarbose" & alt_manu == "global pharm" ~ "global/impax",
+      TRUE ~ alt_manu
+    )
+  )
+
+names_16 <- names_16 %>% 
+  mutate(
+    alt_manu = case_when(
+      alt_brand == "sodium chloride" & alt_generic == "0.9 % sodium chloride" & alt_manu == "hospira" ~ "hospira/icu med",
+      alt_brand == "acarbose" & alt_generic == "acarbose" & alt_manu == "global pharm" ~ "global/impax",
+      alt_brand == "diamox sequels" & alt_generic == "acetazolamide" & alt_manu == "duramed/barr" ~ "teva women's he",
+      alt_brand == "zyloprim" & alt_generic == "allopurinol" & alt_manu == "prometheus labs" ~ "prometh/casper",
+      alt_brand == "fioricet" & alt_generic == "butalb/acetaminophen/caffeine" & alt_manu == "actavis/allerga" ~ "actavis pharma/",
+      alt_brand == "gablofen" & alt_generic == "baclofen" & alt_manu == "mallinckrodt br" ~ "mallinckrodt/pi",
+      alt_brand == "ziac" & alt_generic == "bisoprol/hydrochlorothiazide" & alt_manu == "duramed/barr" ~ "teva women's he",
+      alt_brand == "carbidopa-levodopa" & alt_generic == "carbidopa/levodopa" & alt_manu == "teva usa" ~ "teva/mayne phar",
+      alt_brand == "carbinoxamine maleate" & alt_generic == "carbinoxamine maleate" & alt_manu == "boca pharmacal/" ~ "par pharm.",
+      (alt_brand == "omnaris" | alt_brand == "zetonna") & alt_generic == "ciclesonide" & alt_manu == "sunovion pharma" ~ "sunovion/covis",
+      alt_manu == "claris lifescie" ~ "claris/baxter",
+      alt_brand == "ciprofloxacin-d5w" & alt_generic == "ciprofloxacin in 5 % dextrose" & alt_manu == "hospira" ~ "hospira/pfizer",
+      TRUE ~ alt_manu
+    ),
+    alt_brand = ifelse(
+      alt_brand == "dihydrocodein-acetaminoph-caff" & alt_generic == "acetaminophen/caff/dihydrocod" & alt_manu == "xspire pharma", "acetamin-caff-dihydrocodeine", alt_brand
+      ),
+    alt_generic = case_when(
+      alt_brand == "exforge" & alt_generic == "amlodipine/valsartan" & alt_manu == "novartis" ~ "amlodipine besylate/valsartan",
+      alt_brand == "ziac" & alt_generic == "bisoprol/hydrochlorothiazide" ~ "bisoprolol/hydrochlorothiazide",
+      TRUE ~ alt_generic
+    )
+  )
+
+names_16 %>% select(alt_brand:alt_manu) %>% distinct() %>% 
+  inner_join(
+    names_17 %>% select(alt_brand:alt_manu) %>% distinct(),
+    by = c("alt_brand", "alt_generic", "alt_manu")
+    ) %>% 
+  nrow()
+
+
+unmatched_2 %>% 
+  filter(alt_brand == "versacloz")
+### 91. versacloz / clozapine / jazz pharmaceut (2016) -> jazz/trupharma
+unmatched_2 %>% 
+  filter(alt_brand == "cyclosporine modified" & (alt_manu == "actavis pharma/" | alt_manu == "actavis/mayne p"))
+### 92. cyclosporine modified / cyclosporine, modified / actavis pharma/ (2016) -> actavis/mayne p
+unmatched_2 %>% 
+  filter(alt_brand == "pristiq")
+# wyeth was acquired by pfizer
+names_16 %>% 
+  filter(alt_manu == "wyeth pharm" | alt_manu == "wyeth/pfizer") %>% 
+  count(alt_manu)
+names_17 %>% 
+  filter(alt_manu == "wyeth pharm" | alt_manu == "wyeth/pfizer") %>% 
+  count(alt_manu)
+### 93. change manu wyeth pharm (2016 and 2017) to "wyeth/pfizer"
+
 ```
 
 
