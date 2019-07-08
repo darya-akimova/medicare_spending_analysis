@@ -1,0 +1,51 @@
+---
+title: "Medicare Part D 2017_analysis"
+author: "Darya Akimova"
+date: "7/8/2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+# Setup
+
+## Packages:
+
+```{r packages}
+library(tidyverse)
+library(data.world)
+library(ggthemes)
+theme_set(theme_minimal())
+```
+
+
+## Data:
+
+```{r data}
+### import:
+data_source <- "dakimova/medicare-top-drugs-analysis"
+data_dict <- data.world::query(
+  data.world::qry_sql("SELECT * FROM data_dictionary_4"),
+  dataset = data_source 
+)
+spend_by_drug <- data.world::query(
+  data.world::qry_sql("SELECT * FROM spending_utilization_ytd_2017_2"),
+  dataset = data_source
+)
+spend_by_drug_manu <- data.world::query(
+  data.world::qry_sql("SELECT * FROM manufacturer_summary_4"),
+  dataset = data_source
+)
+drug_use_info <- data.world::query(
+  data.world::qry_sql("SELECT * FROM drug_use_information_4"),
+  dataset = data_source
+)
+### preview:
+data_dict
+colnames(spend_by_drug)
+spend_by_drug
+```
+
