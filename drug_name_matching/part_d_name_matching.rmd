@@ -1055,7 +1055,30 @@ names_17 %>%
   filter(alt_manu == "wyeth pharm" | alt_manu == "wyeth/pfizer") %>% 
   count(alt_manu)
 ### 93. change manu wyeth pharm (2016 and 2017) to "wyeth/pfizer"
-
+unmatched_2 %>% 
+  filter(alt_brand == "diazepam" & str_detect(alt_manu, "actavis"))
+### 94. diazepam / diazepam / actavis pharma/ (2016) -> actavis/mayne p
+unmatched_2 %>% 
+  filter(alt_brand == "didanosine" & (alt_manu == "barr" | alt_manu == "teva usa"))
+### 95. didanosine / didanosine / barr (2016) -> teva usa
+unmatched_2 %>% 
+  filter(alt_brand == "diphenhydramine hcl")
+### 96. diphenhydramine hcl / diphenhydramine hcl / bd rx inc./app (2016) -> fresenius kabi
+unmatched_2 %>% 
+  filter(alt_brand == "dipyridamole" & (alt_manu == "teva usa" | alt_manu == "barr"))
+### giving up on this - 2016 and 2017 change barr to teva usa
+unmatched_2 %>% 
+  filter(alt_brand == "disopyramide phosphate")
+### 97. disopyramide phosphate / disopyramide phosphate / actavis pharma/ (2016) -> actavis/mayne p
+unmatched_2 %>% 
+  filter(alt_brand == "phospholine iodide")
+### 98. phospholine iodide / echothiophate iodide / wyeth pharm (2016) -> wyeth/pfizer
+unmatched_2 %>% 
+  filter(alt_brand == "atripla")
+### 99. atripla / efavirenz/emtricit/tenofovr / bms/gilead (2016) -> generic to efavirenz/emtricit/tenofovr df
+unmatched_2 %>% 
+  filter(alt_brand == "genvoya")
+### 100. genvoya / elviteg/cobi/emtric/tenofo ala / gilead sciences (2016) -> 
 ```
 
 
