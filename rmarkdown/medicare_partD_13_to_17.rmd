@@ -428,7 +428,7 @@ by_brand_models_tidy[[5]] %>%
 Across the board, the MSE error is about the same regardless of alpha. For alpha = 0.5, the conf.high and conf.low are slightly lower than others, but the alpha = 1 looks to be about the same.
 
 
-```{by_brand_glmnet_result}
+```{r by_brand_glmnet_result}
 by_brand_fin_model <- by_brand_models[[3]]
 by_brand_fin_model$lambda.1se
 # predictions - mse pretty high
