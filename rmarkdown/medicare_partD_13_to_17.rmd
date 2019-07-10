@@ -31,10 +31,6 @@ data_dict <- data.world::query(
   data.world::qry_sql("SELECT * FROM data_dictionary_4"),
   dataset = data_source 
 )
-spend_by_drug <- data.world::query(
-  data.world::qry_sql("SELECT * FROM spending_utilization_ytd_2017_2"),
-  dataset = data_source
-)
 spend_by_drug_manu <- data.world::query(
   data.world::qry_sql("SELECT * FROM manufacturer_summary_4"),
   dataset = data_source
@@ -45,7 +41,350 @@ drug_use_info <- data.world::query(
 )
 ### preview:
 data_dict
-colnames(spend_by_drug)
-spend_by_drug
+dim(spend_by_drug_manu)
+colnames(spend_by_drug_manu)
+spend_by_drug_manu
+dim(drug_use_info)
+colnames(drug_use_info)
+drug_use_info
+```
+
+
+# Analysis
+
+## Exploration
+
+```{r}
+spend_by_drug_manu %>% 
+  anti_join(drug_use_info, by = c("brand_name", "generic_name")) %>% 
+  nrow()
+spend_by_drug_manu %>% 
+  sapply(is.na) %>% 
+  data.frame() %>% 
+  sapply(sum) %>% 
+  data.frame() %>% 
+  rownames_to_column("column") %>% 
+  rename("num_missing" = ".") %>% 
+  mutate(
+    per_missing = (num_missing / nrow(spend_by_drug_manu)) * 100,
+    column = fct_reorder(column, per_missing)
+    ) %>% 
+  ggplot(aes(column, per_missing)) +
+  geom_col() +
+  coord_flip() +
+  ylab("Percent Missing (%)") +
+  xlab("Column name")
+
+spend_by_drug_manu %>% 
+  ggplot(aes(change_in_average_spending_per_dosage_unit_2016_2017)) +
+  geom_histogram(bins = 100)
+spend_by_drug_manu %>% 
+  select(brand_name:manufacturer, change_in_average_spending_per_dosage_unit_2016_2017) %>% 
+  filter(change_in_average_spending_per_dosage_unit_2016_2017 > 2) %>% 
+  arrange(change_in_average_spending_per_dosage_unit_2016_2017)
+spend_by_drug_manu %>% 
+  summarize(
+    mean_change = mean(change_in_average_spending_per_dosage_unit_2016_2017),
+    med_change = median(change_in_average_spending_per_dosage_unit_2016_2017)
+  )
+spend_by_drug_manu %>% 
+  filter(change_in_average_spending_per_dosage_unit_2016_2017 < 2) %>% 
+  ggplot(aes(change_in_average_spending_per_dosage_unit_2016_2017)) +
+  geom_histogram(bins = 100)
+
+spend_by_drug_manu %>% 
+  ggplot(aes(annual_growth_rate_in_average_spending_per_dosage_unit_2013_2017)) +
+  geom_histogram(bins = 100)
+spend_by_drug_manu %>% 
+  select(brand_name:manufacturer, annual_growth_rate_in_average_spending_per_dosage_unit_2013_2017) %>% 
+  filter(annual_growth_rate_in_average_spending_per_dosage_unit_2013_2017 > 10)
+spend_by_drug_manu %>% 
+  filter(annual_growth_rate_in_average_spending_per_dosage_unit_2013_2017 < 10) %>% 
+  ggplot(aes(annual_growth_rate_in_average_spending_per_dosage_unit_2013_2017)) +
+  geom_histogram(bins = 100)
+
+spend_colname <- c(colnames(spend_by_drug_manu)[1:3], paste(colnames(spend_by_drug_manu)[4:10], c(rep("2013", 7), rep("2014", 7), rep("2015", 7), rep("2016", 7), rep("2017", 7)), sep = "."))
+
+
+spend_tidy <- spend_by_drug_manu %>% 
+  select(-c(change_in_average_spending_per_dosage_unit_2016_2017, annual_growth_rate_in_average_spending_per_dosage_unit_2013_2017)) %>% 
+  # fix column names:
+  `colnames<-`(spend_colname) %>% 
+  # wide df to long
+  gather(key = "variable", value = "value", -c(brand_name:manufacturer)) %>% 
+  # separate year attached through colnames and variable name
+  separate(variable, into = c("variable", "year"), sep = "\\.") %>% 
+  spread(variable, value) %>% 
+  # string name cleanup:
+  mutate_at(vars(brand_name:manufacturer), str_to_lower) %>%
+  # some brand names have "*" mark - related to disclaimer for the drug use information indicating that the use information is a summary and 
+  # does not provide all information about the product
+  mutate(brand_name = str_replace(brand_name, "\\*", "")) %>% 
+  # reorder rows
+  arrange(brand_name, generic_name, manufacturer, year)
+# result:
+spend_tidy
+### plots:
+# what is the shape of the distribution of the variables
+spend_tidy %>% 
+  gather("variable", "value", -c(brand_name:year)) %>% 
+  # all of the variable distributions have a strong right skew - take log2
+  ggplot(aes(log2(value))) +
+  geom_histogram(bins = 100) +
+  facet_wrap(~ variable, scales = "free")
+library(GGally)
+spend_tidy %>%
+  select(-c(brand_name:year)) %>% 
+  mutate_all(log2) %>% 
+  ggcorr(label = TRUE, label_round = 2, nbreaks = 7, layout.exp = 4, hjust = 1) 
+spend_tidy %>% 
+  ggplot(aes(log2(total_beneficiaries), log2(total_claims))) +
+  geom_point(alpha = 0.2, size = 0.2) +
+  # unity line in blue
+  geom_abline(intercept = 0, slope = 1, color = "blue", size = 1.5) +
+  geom_smooth(method = "lm", color = "orange") +
+  facet_wrap(~ year)
+spend_tidy <- spend_tidy %>% 
+  mutate(num_refill = total_claims / total_beneficiaries) 
+spend_tidy %>% 
+  ggplot(aes(num_refill)) +
+  geom_histogram(bins = 100)
+spend_tidy %>% 
+  select(brand_name:year, total_beneficiaries:total_claims, num_refill) %>% 
+  filter(num_refill > 50)
+spend_tidy %>% 
+  filter(generic_name == "aripiprazole") %>% 
+  select(brand_name:year, num_refill) %>% 
+  ggplot(aes(num_refill)) +
+  geom_histogram(bins = 20)
+# probably typos
+spend_tidy <- spend_tidy %>% 
+  filter(!is.na(total_claims)) %>% 
+  count(brand_name, generic_name, year, name = "num_manu_per_year") %>% 
+  inner_join(spend_tidy, by = c("brand_name", "generic_name", "year"))
+spend_tidy %>% 
+  ggplot(aes(num_manu_per_year, log2(total_claims))) +
+  geom_point(alpha = 0.2, size = 0.2) +
+  facet_wrap(~ year)
+
+
+drug_use_cln <- drug_use_info %>% 
+  mutate_all(str_to_lower) %>% 
+  mutate(brand_name = str_replace(brand_name, "\\*", "")) %>% 
+  arrange(brand_name, generic_name)
+drug_use_cln
+# sanity check
+spend_tidy %>% 
+  anti_join(drug_use_cln, by = c("brand_name", "generic_name")) %>% 
+  nrow()
+library(tidytext)
+drug_use_cln %>% 
+  filter(drug_uses == "drug uses not available") %>% 
+  nrow()
+# 253 items without an associated drug use
+set.seed(20)
+drug_use_cln %>% 
+  filter(drug_uses == "drug uses not available") %>% 
+  sample_n(20)
+# many items missing a drug use are items like syringes, alcohol pads, but some are medications with no provided drug use
+drug_uses_token <- drug_use_cln %>% 
+  filter(drug_uses != "drug uses not available") %>% 
+  mutate(drug_num = row_number()) %>% 
+  unnest_tokens(word, drug_uses) %>%
+  distinct() %>% 
+  anti_join(stop_words, by = "word")
+drug_uses_token
+drug_uses_token %>% 
+  count(word, sort = TRUE)
+common_words <- drug_uses_token %>% 
+  count(word) %>% 
+  filter(n > 2000)
+common_words
+# turns out each drug description has the same exact disclaimer at the end, emphasizing that the provided summary does not include all
+# of the information about the drug and encourages individuals to see their medical professional for more information
+drug_uses_token <- drug_uses_token %>% 
+  filter(!(word %in% common_words$word))
+nrow(drug_uses_token)
+token_count <- drug_uses_token %>% 
+  count(word, sort = TRUE)
+
+token_count %>% 
+  top_n(30) %>% 
+  mutate(word = fct_reorder(word, n)) %>% 
+  ggplot(aes(word, n)) +
+  geom_col() +
+  coord_flip()
+# generic words, but appearance of blood, heart, brain, pain, and kidney potentially interesting
+
+token_count %>% 
+  ggplot(aes(log2(n))) +
+  geom_histogram(bins = 50)
+set.seed(20)
+token_count %>% 
+  filter(n == 1) %>% 
+  sample_n(20)
+# many rare words are the drug names themselves (drug use info typically references it) and some potentially interesting words,
+# but with n = 1 results may be unreliable
+token_count_filt <- token_count %>% 
+  # filter on frequency and at least one letter in the word (remove numbers)
+  filter(n >= 10 & str_detect(word, "[a-z]"))
+nrow(token_count)
+nrow(token_count_filt)
+# over half of unique words removed
+claims_summ <- spend_tidy %>% 
+  filter(!is.na(total_claims)) %>% 
+  group_by(brand_name, generic_name) %>% 
+  summarize(sum_claims = sum(total_claims)) %>% 
+  ungroup() %>% 
+  inner_join(
+    drug_uses_token %>% 
+      select(brand_name:drug_num) %>% 
+      distinct(),
+    by = c("brand_name", "generic_name")
+    )
+claims_summ
+claims_summ %>% 
+  ggplot(aes(log2(sum_claims))) +
+  geom_histogram(bins = 100)
+claims_summ <- claims_summ %>% 
+  mutate(sum_claims_log = log2(sum_claims))
+drug_token_filt <- drug_uses_token %>% 
+  filter(word %in% token_count_filt$word)
+nrow(drug_uses_token)
+nrow(drug_token_filt)
+sparse_token_mat <- drug_token_filt %>% 
+  cast_sparse(drug_num, word)
+library(glmnet)
+sum_claims_mat <- as.matrix(claims_summ$sum_claims_log)
+test_model <- cv.glmnet(sparse_token_mat, sum_claims_mat, alpha = 0.5, family = "gaussian")
+plot(test_model)
+test_model$lambda.min
+test_model_coef <- coef(test_model, test_model$lambda.min) %>% 
+  as.matrix() %>% 
+  as.data.frame() %>% 
+  rownames_to_column("word") %>% 
+  as_tibble() %>% 
+  rename("coef" = `1`) %>% 
+  filter(coef != 0) %>% 
+  mutate(abs_coef = abs(coef))
+test_model_coef %>% 
+  arrange(coef) %>% 
+  head(30) %>% 
+  mutate(word = fct_reorder(word, coef)) %>% 
+  ggplot(aes(word, coef)) +
+  geom_col() +
+  coord_flip()
+test_model_coef %>% 
+  filter(word != "(Intercept)") %>% 
+  arrange(desc(coef)) %>% 
+  head(30) %>% 
+  mutate(word = fct_reorder(word, coef)) %>% 
+  ggplot(aes(word, coef)) +
+  geom_col() +
+  coord_flip()
+drug_token_filt %>% 
+  filter(str_detect(word, "antidepress")) %>% 
+  select(brand_name, generic_name)
+drug_token_filt %>% 
+  filter(brand_name == "prozac") %>% 
+  arrange(word)
+drug_token_filt %>% 
+  filter(brand_name == "zoloft") %>% 
+  arrange(word) 
+drug_token_filt %>% 
+  filter(word == "monoclonal") %>% 
+  arrange(generic_name, brand_name)
+
+drug_token_filt %>% 
+  select(generic_name) %>% 
+  distinct() %>% 
+  arrange(generic_name) %>% 
+  mutate(drug_num = row_number())
+
+generic_token <- drug_token_filt %>% 
+  select(-c(brand_name, drug_num)) %>% 
+  distinct() %>% 
+  arrange(generic_name) %>% 
+  inner_join(
+    # new numbering based on generic name only (old one associated with brand/generic name combo)
+    drug_token_filt %>% 
+      select(generic_name) %>% 
+      distinct() %>% 
+      arrange(generic_name) %>% 
+      mutate(drug_num = row_number()),
+    by = "generic_name"
+  )
+generic_token
+generic_claims_summ <- claims_summ %>% 
+  group_by(generic_name) %>% 
+  summarise(generic_claim = sum(sum_claims)) %>% 
+  ungroup() %>% 
+  inner_join(
+    generic_token %>%
+      select(generic_name, drug_num) %>%
+      distinct(), 
+    by = "generic_name"
+    ) %>% 
+  mutate(generic_claim_log = log2(generic_claim))
+generic_claims_summ
+
+
+generic_token_mat <- generic_token %>% 
+  cast_sparse(drug_num, word)
+generic_claims_mat <- as.matrix(generic_claims_summ$generic_claim_log)
+
+
+gen_test_model <- cv.glmnet(generic_token_mat, generic_claims_mat, alpha = 0.5, family = "gaussian")
+plot(gen_test_model)
+gen_test_model$lambda.min
+gen_model_coef <- coef(gen_test_model, gen_test_model$lambda.min) %>% 
+  as.matrix() %>% 
+  as.data.frame() %>% 
+  rownames_to_column("word") %>% 
+  as_tibble() %>% 
+  rename("coef" = `1`) %>% 
+  filter(coef != 0) %>% 
+  mutate(abs_coef = abs(coef))
+gen_model_coef
+
+
+gen_model_coef %>% 
+  arrange(coef) %>% 
+  head(30) %>% 
+  mutate(word = fct_reorder(word, coef)) %>% 
+  ggplot(aes(word, coef)) +
+  geom_col() +
+  coord_flip()
+gen_model_coef %>% 
+  filter(word != "(Intercept)") %>% 
+  arrange(desc(coef)) %>% 
+  head(30) %>% 
+  mutate(word = fct_reorder(word, coef)) %>% 
+  ggplot(aes(word, coef)) +
+  geom_col() +
+  coord_flip()
+generic_token %>% 
+  filter(word == "knee")
+# this is a variety of different drugs - anti-inflammatory, anti-coagulants, gout treatment
+# some make reference to preventing adverse events post-surgery (knee replacement), others treat arthritis
+# zoster is shingles - skin condition common in older people
+generic_token %>% 
+  filter(word == "monoamine")
+
+
+gen_test_model <- cv.glmnet(generic_token_mat, generic_claims_mat, alpha = 0.5, family = "gaussian")
+gen_test_model$lambda.1se
+gen_test_result <- predict(gen_test_model, generic_token_mat)
+2 ^ mean((generic_claims_mat - gen_test_result) ^ 2)
+plot(generic_claims_mat, gen_test_result)
+
+
+test_a <- seq(0, 1, by = 0.1)
+
+test <- test_a %>% 
+  map(function(x) cv.glmnet(generic_token_mat, generic_claims_mat, alpha = x, family = "gaussian"))
+plot(test[[1]])
+plot(test[[2]])
+plot(test[[11]])
 ```
 
