@@ -12,12 +12,31 @@ knitr::opts_chunk$set(echo = TRUE)
 
 # Setup
 
+## Introduction:
+
+Medicare Part D Drug Spending:
+
+* Medicare generally available for people age 65 or older, but younger people with disabilities or end stage renal disease may qualify
+* Part D covers self-administered prescription drugs (Part B covers drugs administered in a clinical setting, like many chemotherapeutics)
+* 2017 dataset includes data for years 2013-2017
+* Missing values may be truly missing or redacted
+
+
+Q: Is there a relationship between drug type/class/application and Medicare Part D spending or prescription count?
+
+* No standard database identifiers except for brand name and generic name are provided for drugs in the Part D data - hard to associate drugs with class
+* In newer datasets, CMS provides a drug uses summary that may be useful for this purpose
+
+
 ## Packages:
 
 ```{r packages}
 library(tidyverse)
 library(data.world)
 library(ggthemes)
+library(GGally)
+library(tidytext)
+library(glmnet)
 theme_set(theme_minimal())
 ```
 
@@ -26,15 +45,18 @@ theme_set(theme_minimal())
 
 ```{r data}
 ### import:
+# drug spending variable dictionary
 data_source <- "dakimova/medicare-top-drugs-analysis"
 data_dict <- data.world::query(
   data.world::qry_sql("SELECT * FROM data_dictionary_4"),
   dataset = data_source 
 )
+# Medicare Part D spending data 2013-2017
 spend_by_drug_manu <- data.world::query(
   data.world::qry_sql("SELECT * FROM manufacturer_summary_4"),
   dataset = data_source
 )
+# Drug use summaries for drugs included in the 2013-2017 spending data
 drug_use_info <- data.world::query(
   data.world::qry_sql("SELECT * FROM drug_use_information_4"),
   dataset = data_source
@@ -50,14 +72,24 @@ drug_use_info
 ```
 
 
+To Do:
+
+* Spending df needs to be tidied from wide format to long so that each variable is one column
+* Drug and manufacturer name cleanup - convert to lowercase
+* For drug use df - also convert to lowercase, tokenize drug uses
+* Explore drug spending data
+
+
 # Analysis
 
 ## Exploration
 
-```{r}
+```{r missing_val}
+### Q: any drugs in spending df not in drug use df? 
 spend_by_drug_manu %>% 
   anti_join(drug_use_info, by = c("brand_name", "generic_name")) %>% 
   nrow()
+### Q: what is the percent of missing values per column?
 spend_by_drug_manu %>% 
   sapply(is.na) %>% 
   data.frame() %>% 
@@ -74,37 +106,76 @@ spend_by_drug_manu %>%
   coord_flip() +
   ylab("Percent Missing (%)") +
   xlab("Column name")
+```
 
-spend_by_drug_manu %>% 
-  ggplot(aes(change_in_average_spending_per_dosage_unit_2016_2017)) +
-  geom_histogram(bins = 100)
-spend_by_drug_manu %>% 
-  select(brand_name:manufacturer, change_in_average_spending_per_dosage_unit_2016_2017) %>% 
-  filter(change_in_average_spending_per_dosage_unit_2016_2017 > 2) %>% 
-  arrange(change_in_average_spending_per_dosage_unit_2016_2017)
+
+* All drugs in the spending data have a match in the drug use df, but some drugs do not have a summary available.
+* 2016 and 2017 data (variables ending in `_4` or `_5`) have few to no missing values, but some of the 2013 and 2014 data have ~ 30-40% missing values
+(Data could be redacted, or more manufacturers added over the years?)
+
+
+Q: What are the distributions of the provided summary numeric variables?
+
+```{r summary_data_shape}
+data_dict$description[12]
+### % change in spending per dosage unit 2016 to 2017 mean and median:
 spend_by_drug_manu %>% 
   summarize(
     mean_change = mean(change_in_average_spending_per_dosage_unit_2016_2017),
     med_change = median(change_in_average_spending_per_dosage_unit_2016_2017)
   )
+# mean/med close to 0% change 
+# diff suggests slight right skew, or some high outliers
+spend_by_drug_manu %>% 
+  ggplot(aes(change_in_average_spending_per_dosage_unit_2016_2017)) +
+  geom_histogram(bins = 100) +
+  ggtitle("Change in average spending per dosage unit from 2016 to 2017\n(% change)")
+# looks like some high outliers, which drugs are these?:
+spend_by_drug_manu %>% 
+  select(brand_name:manufacturer, change_in_average_spending_per_dosage_unit_2016_2017) %>% 
+  filter(change_in_average_spending_per_dosage_unit_2016_2017 > 2) %>% 
+  arrange(change_in_average_spending_per_dosage_unit_2016_2017)
+# small number of drugs - filter them out
 spend_by_drug_manu %>% 
   filter(change_in_average_spending_per_dosage_unit_2016_2017 < 2) %>% 
   ggplot(aes(change_in_average_spending_per_dosage_unit_2016_2017)) +
-  geom_histogram(bins = 100)
+  geom_histogram(bins = 100) +
+  ggtitle("Change in average spending per dosage unit from 2016 to 2017\n(% change)")
+# center close to 0 %, normal dist 
 
+### annual change in growth rate in spending per dosage unit from 2013 from 2017
+data_dict$description[13]
+spend_by_drug_manu %>% 
+  summarize(
+    mean_change = mean(annual_growth_rate_in_average_spending_per_dosage_unit_2013_2017),
+    med_change = median(annual_growth_rate_in_average_spending_per_dosage_unit_2013_2017)
+  )
+# annual growth rate in spending per dosage unit from 2013 to 2017 also close to zero
 spend_by_drug_manu %>% 
   ggplot(aes(annual_growth_rate_in_average_spending_per_dosage_unit_2013_2017)) +
-  geom_histogram(bins = 100)
+  geom_histogram(bins = 100) +
+  ggtitle("Annual growth rate in average spending per dosage unit (2013 to 2017)")
+# outlier point(s):
 spend_by_drug_manu %>% 
   select(brand_name:manufacturer, annual_growth_rate_in_average_spending_per_dosage_unit_2013_2017) %>% 
   filter(annual_growth_rate_in_average_spending_per_dosage_unit_2013_2017 > 10)
 spend_by_drug_manu %>% 
   filter(annual_growth_rate_in_average_spending_per_dosage_unit_2013_2017 < 10) %>% 
   ggplot(aes(annual_growth_rate_in_average_spending_per_dosage_unit_2013_2017)) +
-  geom_histogram(bins = 100)
+  geom_histogram(bins = 100) +
+  ggtitle("Annual growth rate in average spending per dosage unit (2013 to 2017)")
+# distribution also somewhat normal
+```
 
+
+It may be interesting to experiment with associating drug uses with these two summary variables for change in spending, but they're processed and, especially for the annual growth rate from 2013-2017, it's not entirely clear to me how it was derived from the data.
+
+
+What about the other variables?
+
+
+```{r spend_tidy}
 spend_colname <- c(colnames(spend_by_drug_manu)[1:3], paste(colnames(spend_by_drug_manu)[4:10], c(rep("2013", 7), rep("2014", 7), rep("2015", 7), rep("2016", 7), rep("2017", 7)), sep = "."))
-
 
 spend_tidy <- spend_by_drug_manu %>% 
   select(-c(change_in_average_spending_per_dosage_unit_2016_2017, annual_growth_rate_in_average_spending_per_dosage_unit_2013_2017)) %>% 
@@ -132,7 +203,7 @@ spend_tidy %>%
   ggplot(aes(log2(value))) +
   geom_histogram(bins = 100) +
   facet_wrap(~ variable, scales = "free")
-library(GGally)
+# relathionship between the variables:
 spend_tidy %>%
   select(-c(brand_name:year)) %>% 
   mutate_all(log2) %>% 
@@ -143,41 +214,53 @@ spend_tidy %>%
   # unity line in blue
   geom_abline(intercept = 0, slope = 1, color = "blue", size = 1.5) +
   geom_smooth(method = "lm", color = "orange") +
-  facet_wrap(~ year)
+  facet_wrap(~ year) +
+  ggtitle("Relathionship between # of Total Claims and # of Total Beneficiaries")
+# overall, number of claims tends to be larger than the number of befeciaries (possibly indicating that beneficiaries typically get refills)
+# what is the approximate number of average refills?
 spend_tidy <- spend_tidy %>% 
   mutate(num_refill = total_claims / total_beneficiaries) 
+# average number of refills:
+round(mean(spend_tidy$num_refill, na.rm = TRUE), 2)
 spend_tidy %>% 
   ggplot(aes(num_refill)) +
   geom_histogram(bins = 100)
+# looks like some outliers
 spend_tidy %>% 
   select(brand_name:year, total_beneficiaries:total_claims, num_refill) %>% 
   filter(num_refill > 50)
+# these are most likely typos
+# medroxyprogesterone is also interesting because it's typically used as birth control, but has other uses
 spend_tidy %>% 
   filter(generic_name == "aripiprazole") %>% 
   select(brand_name:year, num_refill) %>% 
   ggplot(aes(num_refill)) +
   geom_histogram(bins = 20)
 # probably typos
-spend_tidy <- spend_tidy %>% 
-  filter(!is.na(total_claims)) %>% 
-  count(brand_name, generic_name, year, name = "num_manu_per_year") %>% 
-  inner_join(spend_tidy, by = c("brand_name", "generic_name", "year"))
-spend_tidy %>% 
-  ggplot(aes(num_manu_per_year, log2(total_claims))) +
-  geom_point(alpha = 0.2, size = 0.2) +
-  facet_wrap(~ year)
+```
 
 
+I'm interested in the connection between drug uses and the most commonly prescribed drugs covered by Medicare Part D. Total spending could also be an intriguing variable to explore, but there are some disclaimers on the CMS.gov website regarding this dataset that raise concerns. Any data relating to cost is based on the gross drug cost, including any Medicare/insurance coverage and beneficiary payments, and CMS is prohibited from disclosing discounts/rebates by the manufacturer.
+
+[cms.gov source](https://www.cms.gov/Research-Statistics-Data-and-Systems/Statistics-Trends-and-Reports/Information-on-Prescription-Drugs/MedicarePartD.html)
+
+
+
+## Drug uses summary token analysis
+
+
+```{r drug_use_tidy}
 drug_use_cln <- drug_use_info %>% 
   mutate_all(str_to_lower) %>% 
+  # replace "*" next to some brand names - related to disclaimer by CMS that provided drug use info is only a summary
   mutate(brand_name = str_replace(brand_name, "\\*", "")) %>% 
   arrange(brand_name, generic_name)
 drug_use_cln
-# sanity check
+# sanity check to make sure name changes did not alter matches
 spend_tidy %>% 
   anti_join(drug_use_cln, by = c("brand_name", "generic_name")) %>% 
   nrow()
-library(tidytext)
+# how many drugs do not have a use available?
 drug_use_cln %>% 
   filter(drug_uses == "drug uses not available") %>% 
   nrow()
@@ -189,36 +272,46 @@ drug_use_cln %>%
 # many items missing a drug use are items like syringes, alcohol pads, but some are medications with no provided drug use
 drug_uses_token <- drug_use_cln %>% 
   filter(drug_uses != "drug uses not available") %>% 
+  # create unique drug reference key number:
   mutate(drug_num = row_number()) %>% 
   unnest_tokens(word, drug_uses) %>%
   distinct() %>% 
+  # filter out common stop words
   anti_join(stop_words, by = "word")
+# result:
 drug_uses_token
-drug_uses_token %>% 
-  count(word, sort = TRUE)
-common_words <- drug_uses_token %>% 
-  count(word) %>% 
-  filter(n > 2000)
-common_words
-# turns out each drug description has the same exact disclaimer at the end, emphasizing that the provided summary does not include all
-# of the information about the drug and encourages individuals to see their medical professional for more information
-drug_uses_token <- drug_uses_token %>% 
-  filter(!(word %in% common_words$word))
-nrow(drug_uses_token)
+# how often does each word appear?
 token_count <- drug_uses_token %>% 
   count(word, sort = TRUE)
-
+token_count
+# turns out each drug description has the same exact disclaimer at the end, emphasizing that the provided summary does not include all
+# of the information about the drug and encourages individuals to see their medical professional for more information
+# remove the most common words:
+common_words <- drug_uses_token %>% 
+  count(word) %>% 
+  filter(n == 2626)
+common_words
+nrow(drug_uses_token)
+drug_uses_token <- drug_uses_token %>% 
+  filter(!(word %in% common_words$word))
+# result:
+nrow(drug_uses_token)
+token_count <- token_count %>% 
+  filter(!(word %in% common_words$word))
 token_count %>% 
   top_n(30) %>% 
   mutate(word = fct_reorder(word, n)) %>% 
   ggplot(aes(word, n)) +
   geom_col() +
-  coord_flip()
+  coord_flip() +
+  ggtitle("Top 30 words in Medicare Part D drug use descriptions")
 # generic words, but appearance of blood, heart, brain, pain, and kidney potentially interesting
 
+### what is the distribution of counts?
 token_count %>% 
   ggplot(aes(log2(n))) +
   geom_histogram(bins = 50)
+# which words have n = 1 counts?
 set.seed(20)
 token_count %>% 
   filter(n == 1) %>% 
@@ -231,35 +324,139 @@ token_count_filt <- token_count %>%
 nrow(token_count)
 nrow(token_count_filt)
 # over half of unique words removed
+drug_token_filt <- drug_uses_token %>% 
+  filter(word %in% token_count_filt$word)
+nrow(drug_uses_token)
+nrow(drug_token_filt)
+```
+
+
+Now that the drug uses have been tokenized and filtered, the spending data will be modified by calculating the total number of claims over the 5 year dataset period for each drug (by brand and generic), regardless of manufacturer. 
+
+Reasons for these decisions:
+
+* This is time series data, but with only 5 data points (one for each year) - would complicate matters
+* The Medicare Part D datasets can be unreliable and missing values, redacted data, and even the number of claims can vary from year to year - trying to dig in very deep may be pointless with unreliable data
+* Deal with missing data - as long as there is data for at least one year, then no need to try and impute or toss out data (particulary helpful for 2013 where columns had 30-40% missing values)
+* Sum over manufacturers because drug should be same across manufacturers and splitting over many manufacturers may distort results
+
+
+```{r claims_summary}
 claims_summ <- spend_tidy %>% 
   filter(!is.na(total_claims)) %>% 
   group_by(brand_name, generic_name) %>% 
+  # sum total claims over the 5 years:
   summarize(sum_claims = sum(total_claims)) %>% 
   ungroup() %>% 
+  # join drug number from the drug uses set 
   inner_join(
     drug_uses_token %>% 
       select(brand_name:drug_num) %>% 
       distinct(),
     by = c("brand_name", "generic_name")
     )
+# result:
 claims_summ
+nrow(claims_summ)
+# some drugs could have been filtered out because 1) missing claims data for all 5 years (unlikely) or 2) no drug use available
+# number of drugs removed:
+spend_by_drug_manu %>% select(brand_name:generic_name) %>% distinct() %>% nrow() - nrow(claims_summ)
+# same number as items with no drug use available
+# is the log2 distribution of the sum of total claims normal:
 claims_summ %>% 
   ggplot(aes(log2(sum_claims))) +
   geom_histogram(bins = 100)
 claims_summ <- claims_summ %>% 
   mutate(sum_claims_log = log2(sum_claims))
-drug_token_filt <- drug_uses_token %>% 
-  filter(word %in% token_count_filt$word)
-nrow(drug_uses_token)
-nrow(drug_token_filt)
+```
+
+
+Regularized regression to tackle the regression task of predicting the number of claims for each drug over a 5-year period based on the drug use tokens.
+
+The benefits of this technique for this problem are:
+
+* Ability to quantitatively predict outcome
+* Feature selection to narrow down ~1100 unique words to ones that are associated with the outcome of interest
+
+
+```{r by_brand_glmnet}
+# create sparse matrix to convert categorical variables (words) to numeric - sparse to manage size
 sparse_token_mat <- drug_token_filt %>% 
   cast_sparse(drug_num, word)
-library(glmnet)
+dim(sparse_token_mat)
+# outcome:
 sum_claims_mat <- as.matrix(claims_summ$sum_claims_log)
-test_model <- cv.glmnet(sparse_token_mat, sum_claims_mat, alpha = 0.5, family = "gaussian")
-plot(test_model)
-test_model$lambda.min
-test_model_coef <- coef(test_model, test_model$lambda.min) %>% 
+# hyperparameter
+a_param <- seq(0, 1, by = 0.25)
+a_param
+by_brand_models <- a_param %>%
+  map(function(x) cv.glmnet(sparse_token_mat, sum_claims_mat, alpha = x, family = "gaussian"))
+# result is list, where each model is one element of list:
+class(by_brand_models)
+length(by_brand_models)
+# mean-squared error vs. lambda plots:
+plot(by_brand_models[[1]], main = "Ridge Regression (alpha = 0)")
+plot(by_brand_models[[2]], main = "Elastic Net (alpha = 0.25)")
+plot(by_brand_models[[3]], main = "Elastic Net (alpha = 0.5)")
+plot(by_brand_models[[4]], main = "Elastic Net (alpha = 0.75)")
+plot(by_brand_models[[5]], main = "Lasso Regression (alpha = 1)")
+# lambda parameter optimization
+by_brand_lambda_min <- map_dbl(by_brand_models, `[[`, "lambda.min")
+by_brand_lambda_1se <- map_dbl(by_brand_models, `[[`, "lambda.1se")
+# result:
+by_brand_lambda_min
+by_brand_lambda_1se
+by_brand_models_tidy <- map(by_brand_models, function(x) tidy(x))
+# mse for alpha = 0
+by_brand_models_tidy[[1]] %>% 
+  filter(lambda == by_brand_lambda_1se[1])
+# mse for alpha = 0.25
+by_brand_models_tidy[[2]] %>% 
+  filter(lambda == by_brand_lambda_1se[2])
+# mse for alpha = 0.5
+by_brand_models_tidy[[3]] %>% 
+  filter(lambda == by_brand_lambda_1se[3])
+# mse for alpha = 0.75
+by_brand_models_tidy[[4]] %>% 
+  filter(lambda == by_brand_lambda_1se[4])
+# mse for alpha = 1
+by_brand_models_tidy[[5]] %>% 
+  filter(lambda == by_brand_lambda_1se[5])
+```
+
+
+Across the board, the MSE error is about the same regardless of alpha. For alpha = 0.5, the conf.high and conf.low are slightly lower than others, but the alpha = 1 looks to be about the same.
+
+
+```{by_brand_glmnet_result}
+by_brand_fin_model <- by_brand_models[[3]]
+by_brand_fin_model$lambda.1se
+# predictions - mse pretty high
+claims_summ$predictions <- predict(by_brand_fin_model, sparse_token_mat)
+claims_summ %>% 
+  ggplot(aes(predictions, sum_claims_log)) +
+  geom_point(size = 1, alpha = 0.2) +
+  # unity line:
+  geom_abline(intercept = 0, slope = 1, color = "orange", size = 1.5) +
+  # acutal relationship:
+  geom_smooth(method = "lm") +
+  xlab("log2(# predicted claims)") +
+  ylab("log2(# actual claims)") +
+  ggtitle("Predicted vs. Actual Total Claims\nPer drug, 5 year period (2013 - 2017)")
+claims_summ <- claims_summ %>% 
+  mutate(res = sum_claims_log - predictions) 
+claims_summ %>% 
+  ggplot(aes(predictions, res)) +
+  geom_point(size = 1, alpha = 0.2) +
+  ylab("Residuals") +
+  ggtitle("Residuals Plot")
+# root mean squared error:
+sqrt(mean(claims_summ$res^2))
+# vs sd:
+sd(claims_summ$sum_claims_log)
+# overall, model tends to overestimate lower values of total claims and underestimate higher total claim counts
+# pull out words that had non-zero coefficients in the model
+by_brand_model_coef <- coef(by_brand_fin_model, by_brand_fin_model$lambda.1se) %>% 
   as.matrix() %>% 
   as.data.frame() %>% 
   rownames_to_column("word") %>% 
@@ -267,41 +464,43 @@ test_model_coef <- coef(test_model, test_model$lambda.min) %>%
   rename("coef" = `1`) %>% 
   filter(coef != 0) %>% 
   mutate(abs_coef = abs(coef))
-test_model_coef %>% 
+# result:
+by_brand_model_coef
+### plots
+by_brand_model_coef %>% 
   arrange(coef) %>% 
   head(30) %>% 
   mutate(word = fct_reorder(word, coef)) %>% 
   ggplot(aes(word, coef)) +
   geom_col() +
-  coord_flip()
-test_model_coef %>% 
+  coord_flip() +
+  ggtitle("Drug uses summary words with non-zero model weights\n(Negative coef)")
+by_brand_model_coef %>% 
   filter(word != "(Intercept)") %>% 
   arrange(desc(coef)) %>% 
   head(30) %>% 
   mutate(word = fct_reorder(word, coef)) %>% 
   ggplot(aes(word, coef)) +
   geom_col() +
-  coord_flip()
+  coord_flip() +
+  ggtitle("Drug uses summary words with non-zero model weights\n(Positive coef)")
 drug_token_filt %>% 
-  filter(str_detect(word, "antidepress")) %>% 
-  select(brand_name, generic_name)
-drug_token_filt %>% 
-  filter(brand_name == "prozac") %>% 
-  arrange(word)
-drug_token_filt %>% 
-  filter(brand_name == "zoloft") %>% 
-  arrange(word) 
-drug_token_filt %>% 
-  filter(word == "monoclonal") %>% 
-  arrange(generic_name, brand_name)
+  filter(word == "knee") %>% 
+  arrange(generic_name)
+# this is a variety of different drugs - anti-inflammatory, anti-coagulants, blood thinners
+# some make reference to preventing adverse events post-surgery (knee replacement), others treat arthritis
+# zoster is shingles - skin condition common in older people
+```
 
-drug_token_filt %>% 
-  select(generic_name) %>% 
-  distinct() %>% 
-  arrange(generic_name) %>% 
-  mutate(drug_num = row_number())
 
+For drugs in this dataset, the `generic_name` corresponds to the active ingredient(s) that are responsible for the action of the drug. It's possible that for some drugs with several brand names, the total claims count is being diluted across the different drugs. 
+
+Would the drug use words that are strongly associated with claim count change if the number of total claims was summarized differently?
+
+
+```{r by_generic_glment}
 generic_token <- drug_token_filt %>% 
+  # discard brand name and will renumber drug again because count will go down
   select(-c(brand_name, drug_num)) %>% 
   distinct() %>% 
   arrange(generic_name) %>% 
@@ -314,30 +513,90 @@ generic_token <- drug_token_filt %>%
       mutate(drug_num = row_number()),
     by = "generic_name"
   )
+# result:
 generic_token
 generic_claims_summ <- claims_summ %>% 
   group_by(generic_name) %>% 
   summarise(generic_claim = sum(sum_claims)) %>% 
   ungroup() %>% 
   inner_join(
+    # merge with new drug num to keep key the same
     generic_token %>%
       select(generic_name, drug_num) %>%
       distinct(), 
     by = "generic_name"
     ) %>% 
   mutate(generic_claim_log = log2(generic_claim))
+# result:
 generic_claims_summ
-
-
+# new sparse matrix and outcome
 generic_token_mat <- generic_token %>% 
   cast_sparse(drug_num, word)
+dim(generic_token_mat)
+# note: fewer rows than the previous set
 generic_claims_mat <- as.matrix(generic_claims_summ$generic_claim_log)
 
+by_generic_models <- a_param %>%
+  map(function(x) cv.glmnet(generic_token_mat, generic_claims_mat, alpha = x, family = "gaussian"))
+# mean-squared error vs. lambda plots:
+plot(by_generic_models[[1]], main = "Ridge Regression (alpha = 0)")
+plot(by_generic_models[[2]], main = "Elastic Net (alpha = 0.25)")
+plot(by_generic_models[[3]], main = "Elastic Net (alpha = 0.5)")
+plot(by_generic_models[[4]], main = "Elastic Net (alpha = 0.75)")
+plot(by_generic_models[[5]], main = "Lasso Regression (alpha = 1)")
+# lambda parameter optimization
+by_generic_lambda_min <- map_dbl(by_generic_models, `[[`, "lambda.min")
+by_generic_lambda_1se <- map_dbl(by_generic_models, `[[`, "lambda.1se")
+# result:
+by_generic_lambda_min
+by_generic_lambda_1se
+by_generic_models_tidy <- map(by_generic_models, function(x) tidy(x))
+# mse for alpha = 0
+by_generic_models_tidy[[1]] %>% 
+  filter(lambda == by_generic_lambda_1se[1])
+# mse for alpha = 0.25
+by_generic_models_tidy[[2]] %>% 
+  filter(lambda == by_generic_lambda_1se[2])
+# mse for alpha = 0.5
+by_generic_models_tidy[[3]] %>% 
+  filter(lambda == by_generic_lambda_1se[3])
+# mse for alpha = 0.75
+by_generic_models_tidy[[4]] %>% 
+  filter(lambda == by_generic_lambda_1se[4])
+# mse for alpha = 1
+by_generic_models_tidy[[5]] %>% 
+  filter(lambda == by_generic_lambda_1se[5])
+# overall MSE error is about the same as for the previous model
+# the ridge variant has the lowest error, but difficult to interpret, pick alpha = 0.25 variant
+by_generic_fin_model <- by_generic_models[[2]]
+by_generic_fin_model$lambda.1se
+# predictions - mse pretty high
+generic_claims_summ$predictions <- predict(by_generic_fin_model, generic_token_mat)
+generic_claims_summ %>% 
+  ggplot(aes(predictions, generic_claim_log)) +
+  geom_point(size = 1, alpha = 0.2) +
+  # unity line:
+  geom_abline(intercept = 0, slope = 1, color = "orange", size = 1.5) +
+  # acutal relationship:
+  geom_smooth(method = "lm") +
+  xlab("log2(# predicted claims)") +
+  ylab("log2(# actual claims)") +
+  ggtitle("Predicted vs. Actual Total Claims\nPer drug by Generic Name, 5 year period (2013 - 2017)")
 
-gen_test_model <- cv.glmnet(generic_token_mat, generic_claims_mat, alpha = 0.5, family = "gaussian")
-plot(gen_test_model)
-gen_test_model$lambda.min
-gen_model_coef <- coef(gen_test_model, gen_test_model$lambda.min) %>% 
+generic_claims_summ <- generic_claims_summ %>% 
+  mutate(res = generic_claim_log - predictions) 
+generic_claims_summ %>% 
+  ggplot(aes(predictions, res)) +
+  geom_point(size = 1, alpha = 0.2) +
+  ylab("Residuals") +
+  ggtitle("Residuals Plot")
+# root mean squared error:
+sqrt(mean(generic_claims_summ$res^2))
+# vs sd:
+sd(generic_claims_summ$generic_claim_log)
+# about the same fit quality as the previous model
+# pull out words that had non-zero coefficients in the model
+by_generic_model_coef <- coef(by_generic_fin_model, by_generic_fin_model$lambda.1se) %>% 
   as.matrix() %>% 
   as.data.frame() %>% 
   rownames_to_column("word") %>% 
@@ -345,46 +604,42 @@ gen_model_coef <- coef(gen_test_model, gen_test_model$lambda.min) %>%
   rename("coef" = `1`) %>% 
   filter(coef != 0) %>% 
   mutate(abs_coef = abs(coef))
-gen_model_coef
-
-
-gen_model_coef %>% 
+### plots
+by_generic_model_coef %>% 
   arrange(coef) %>% 
   head(30) %>% 
   mutate(word = fct_reorder(word, coef)) %>% 
   ggplot(aes(word, coef)) +
   geom_col() +
-  coord_flip()
-gen_model_coef %>% 
+  coord_flip() +
+  ggtitle("Drug uses summary words with non-zero model weights\nAnalyzed by generic name\n(Negative coef)")
+by_generic_model_coef %>% 
   filter(word != "(Intercept)") %>% 
   arrange(desc(coef)) %>% 
   head(30) %>% 
   mutate(word = fct_reorder(word, coef)) %>% 
   ggplot(aes(word, coef)) +
   geom_col() +
-  coord_flip()
-generic_token %>% 
-  filter(word == "knee")
-# this is a variety of different drugs - anti-inflammatory, anti-coagulants, gout treatment
-# some make reference to preventing adverse events post-surgery (knee replacement), others treat arthritis
-# zoster is shingles - skin condition common in older people
-generic_token %>% 
-  filter(word == "monoamine")
+  coord_flip() +
+  ggtitle("Drug uses summary words with non-zero model weights\nAnalyzed by generic name\n(Positive coef)")
 
-
-gen_test_model <- cv.glmnet(generic_token_mat, generic_claims_mat, alpha = 0.5, family = "gaussian")
-gen_test_model$lambda.1se
-gen_test_result <- predict(gen_test_model, generic_token_mat)
-2 ^ mean((generic_claims_mat - gen_test_result) ^ 2)
-plot(generic_claims_mat, gen_test_result)
-
-
-test_a <- seq(0, 1, by = 0.1)
-
-test <- test_a %>% 
-  map(function(x) cv.glmnet(generic_token_mat, generic_claims_mat, alpha = x, family = "gaussian"))
-plot(test[[1]])
-plot(test[[2]])
-plot(test[[11]])
+# which words are in both?
+shared_model_words <- by_brand_model_coef %>% 
+  inner_join(by_generic_model_coef, by = "word", suffix = c("_brand", "_generic")) %>% 
+  filter(word != "(Intercept)")
+shared_model_words
+shared_model_words %>% 
+  ggplot(aes(coef_brand, coef_generic)) +
+  geom_point() +
+  xlab("Coef (By brand name model)") +
+  ylab("Coef (By generic name model") +
+  # unity line:
+  geom_abline(intercept = 0, slope = 1, color = "orange", size = 1.5) +
+  # acutal relationship:
+  geom_smooth(method = "lm")
 ```
+
+
+In general, if a coefficient for a particular word is negative in one model, it is negative in the other (and vice versa), by the magnitude of the coefficient can vary.
+
 
